@@ -15,7 +15,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 
-def compose_video(audio_path, media_assets, output_dir="output", fps=30, bitrate="8000k"):
+def compose_video(audio_path, media_assets, output_dir="output", fps=30, bitrate="2500k"):
     """
     Compose final video from media clips and audio narration.
 
@@ -29,9 +29,9 @@ def compose_video(audio_path, media_assets, output_dir="output", fps=30, bitrate
     Returns:
         Dict with output video metadata
     """
-    from moviepy.editor import (
+    from moviepy import (
         VideoFileClip, ImageClip, AudioFileClip,
-        concatenate_videoclips, ColorClip
+        concatenate_videoclips, ColorClip, CompositeVideoClip
     )
 
     if not os.path.exists(audio_path):
@@ -85,7 +85,7 @@ def compose_video(audio_path, media_assets, output_dir="output", fps=30, bitrate
         except Exception as e:
             print(f"   ⚠️  Clip {i} failed ({e}), using black fallback")
             fallback = ColorClip(size=(1920, 1080), color=(0, 0, 0), duration=required_duration)
-            fallback = fallback.set_fps(fps)
+            fallback = fallback.with_fps(fps)
             video_clips.append(fallback)
 
     # Concatenate all clips
@@ -93,14 +93,14 @@ def compose_video(audio_path, media_assets, output_dir="output", fps=30, bitrate
     final_video = concatenate_videoclips(video_clips, method="compose")
 
     # Force exact duration to match audio
-    final_video = final_video.set_duration(audio_duration)
-    final_video = final_video.set_audio(audio_clip)
+    final_video = final_video.with_duration(audio_duration)
+    final_video = final_video.with_audio(audio_clip)
 
     # Verify sync
     duration_diff = abs(final_video.duration - audio_clip.duration)
     if duration_diff > 0.5:
         print(f"   ⚠️  Duration mismatch: {duration_diff:.2f}s (forcing correction)")
-        final_video = final_video.set_duration(audio_duration)
+        final_video = final_video.with_duration(audio_duration)
 
     # Export
     os.makedirs(output_dir, exist_ok=True)
@@ -114,9 +114,9 @@ def compose_video(audio_path, media_assets, output_dir="output", fps=30, bitrate
         audio_codec="aac",
         fps=fps,
         bitrate=bitrate,
-        preset="medium",
-        threads=4,
-        logger=None,  # Suppress MoviePy progress spam
+        preset="ultrafast",
+        threads=8,
+        logger="bar",  # Show progress bar based on user feedback
     )
 
     # Close clips to free memory
@@ -148,24 +148,24 @@ def compose_video(audio_path, media_assets, output_dir="output", fps=30, bitrate
 
 def _process_video_clip(path, required_duration):
     """Load and adjust video clip to required duration."""
-    from moviepy.editor import VideoFileClip, concatenate_videoclips
+    from moviepy import VideoFileClip, concatenate_videoclips
 
     clip = VideoFileClip(path)
 
     if clip.duration >= required_duration:
-        clip = clip.subclip(0, required_duration)
+        clip = clip.subclipped(0, required_duration)
     else:
         # Loop video to fill required duration
         num_loops = int(required_duration / clip.duration) + 1
         clip = concatenate_videoclips([clip] * num_loops)
-        clip = clip.subclip(0, required_duration)
+        clip = clip.subclipped(0, required_duration)
 
     return clip
 
 
 def _process_image_clip(path, required_duration):
     """Create video clip from image with Ken Burns-like effect."""
-    from moviepy.editor import ImageClip
+    from moviepy import ImageClip
 
     clip = ImageClip(path, duration=required_duration)
     return clip
@@ -173,29 +173,33 @@ def _process_image_clip(path, required_duration):
 
 def _resize_to_1080p(clip):
     """Resize clip to 1920x1080, maintaining aspect ratio with black bars."""
-    from moviepy.editor import CompositeVideoClip, ColorClip
+    from moviepy import CompositeVideoClip, ColorClip
 
     target_w, target_h = 1920, 1080
 
     # Get current dimensions
     w, h = clip.size
+    print(f"     resize: {w}x{h} -> target 1920x1080")
 
     # Calculate scale to fit within 1920x1080
     scale = min(target_w / w, target_h / h)
     new_w = int(w * scale)
     new_h = int(h * scale)
 
-    clip = clip.resize((new_w, new_h))
+    try:
+        clip = clip.resized((new_w, new_h))
+    except AttributeError:
+        clip = clip.resize((new_w, new_h))
 
     # Center on black background
     bg = ColorClip(size=(target_w, target_h), color=(0, 0, 0), duration=clip.duration)
-    bg = bg.set_fps(clip.fps if clip.fps else 30)
+    bg = bg.with_fps(clip.fps if clip.fps else 30)
 
     final = CompositeVideoClip(
-        [bg, clip.set_position("center")],
+        [bg, clip.with_position("center")],
         size=(target_w, target_h)
     )
-    final = final.set_duration(clip.duration)
+    final = final.with_duration(clip.duration)
     return final
 
 

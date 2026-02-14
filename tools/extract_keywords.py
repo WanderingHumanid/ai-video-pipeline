@@ -88,6 +88,7 @@ def extract_keywords_from_segments(script_data):
             "text": text,
             "keywords": valid_keywords,
             "primary_keyword": valid_keywords[0],
+            "visual_search_query": segment.get("visual_search_query", valid_keywords[0])
         }
         keywords_by_segment.append(segment_entry)
 

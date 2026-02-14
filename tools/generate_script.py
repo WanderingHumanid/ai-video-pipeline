@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import re
+import time
 import datetime
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ For each segment, provide:
 - The narration text
 - Estimated speaking duration in seconds
 - 2-3 visual keywords (concrete nouns: objects, places, things) for sourcing stock footage
+- A specific visual search query for stock footage websites (3-4 words)
 
 OUTPUT FORMAT (strict JSON, no markdown):
 {{
@@ -40,6 +42,7 @@ OUTPUT FORMAT (strict JSON, no markdown):
     {{
       "text": "segment narration text",
       "duration_estimate": 12.5,
+      "visual_search_query": "futuristic space station rendering",
       "keywords": ["keyword1", "keyword2"]
     }}
   ]
@@ -59,12 +62,12 @@ def generate_script(topic):
         raise ValueError("GEMINI_API_KEY not configured in .env")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
 
     prompt = PROMPT_TEMPLATE.format(topic=topic)
 
     # Attempt generation with retries
-    max_retries = 3
+    max_retries = 5
     last_error = None
 
     for attempt in range(max_retries):
@@ -74,15 +77,23 @@ def generate_script(topic):
                 prompt,
                 generation_config=genai.types.GenerationConfig(
                     temperature=temperature,
-                    max_output_tokens=2000,
+                    max_output_tokens=4000,
+                    response_mime_type="application/json",
                 ),
             )
 
             raw_text = response.text.strip()
 
-            # Strip markdown code fences if present
-            raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-            raw_text = re.sub(r"\s*```$", "", raw_text)
+            # Extract JSON from potential markdown or text
+            start_idx = raw_text.find('{')
+            end_idx = raw_text.rfind('}')
+            
+            if start_idx != -1 and end_idx != -1:
+                raw_text = raw_text[start_idx:end_idx+1]
+            else:
+                # Fallback to stripping fences if braces not found (unlikely for valid JSON)
+                raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+                raw_text = re.sub(r"\s*```$", "", raw_text)
 
             script_data = json.loads(raw_text)
 
@@ -128,8 +139,17 @@ def generate_script(topic):
             last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
             print(f"⚠️  {last_error}")
         except Exception as e:
-            last_error = f"Generation error (attempt {attempt + 1}): {e}"
+            last_error = f"Error (attempt {attempt + 1}): {e}"
             print(f"⚠️  {last_error}")
+            error_str = str(e).lower()
+            if "quota" in error_str or "429" in error_str or "resource" in error_str:
+                wait_time = 15 * (2 ** attempt)  # 15s, 30s, 60s, 120s, 240s
+                print(f"⚠️  Quota/rate limit hit (attempt {attempt + 1}). Waiting {wait_time}s...")
+                time.sleep(wait_time)
+                last_error = f"Quota exceeded (attempt {attempt + 1})"
+            else:
+                last_error = f"Generation error (attempt {attempt + 1}): {e}"
+                print(f"⚠️  {last_error}")
 
     raise RuntimeError(f"Script generation failed after {max_retries} attempts: {last_error}")
 

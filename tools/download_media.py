@@ -63,13 +63,21 @@ def download_media(keywords_data, audio_duration=60.0):
         idx = segment["segment_index"]
         keywords = segment["keywords"]
         primary_kw = segment["primary_keyword"]
+        visual_query = segment.get("visual_search_query")
 
-        print(f"\n📥 Segment {idx}: Searching for '{primary_kw}'...")
+        print(f"\n📥 Segment {idx}: Processing...")
 
         media = None
 
+        # Tier 0: Specific Visual Search Query (Highest Relevance)
+        if visual_query:
+            print(f"   🔎 Searching: '{visual_query}'")
+            media = _search_pexels_video(visual_query, duration_per_segment)
+
         # Tier 1: Primary keyword video search
-        media = _search_pexels_video(primary_kw, duration_per_segment)
+        if not media:
+            print(f"   ↳ Fallback to keyword: '{primary_kw}'")
+            media = _search_pexels_video(primary_kw, duration_per_segment)
 
         # Tier 2: Try alternative keywords + simplified versions
         if not media:
