@@ -1,0 +1,56 @@
+# 🔒 Security: API Keys and Secrets
+.env
+
+# 🗑️ Temporary Files
+.tmp/
+*.tmp
+*.temp
+
+# 🎬 Generated Videos
+output/
+
+# 🐍 Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 🧪 Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 💻 IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 📦 OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 📝 Logs
+*.log
+
+# 🎥 Media Cache (if any)
+media_cache/
