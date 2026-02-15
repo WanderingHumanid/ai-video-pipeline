@@ -1,14 +1,4 @@
-"""
-Video Composition Tool
-Renders final .mp4 video by syncing media clips with audio narration.
-Uses MoviePy and FFmpeg. Subtitles burned via FFmpeg drawtext filter.
-
-Optimized for speed:
-  - 854x480 default resolution (fast render, good for YouTube)
-  - 20fps (fewer frames, negligible quality difference)
-  - ultrafast preset with sensible bitrate
-  - Simplified resize (no CompositeVideoClip overhead)
-"""
+"""Renders final .mp4 by syncing media clips with audio. Subtitles burned via FFmpeg."""
 
 import json
 import os
@@ -16,43 +6,42 @@ import sys
 import datetime
 import subprocess
 import shutil
+import random
 
-# Fix Windows console encoding
+BITRATE_MAP = {480: "1000k", 720: "2500k", 1080: "4000k"}
+CROSSFADE_DURATION = 0.5
+
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 
+def _resolve_bitrate(resolution, bitrate_override=None):
+    if bitrate_override:
+        return bitrate_override
+    height = resolution[1]
+    for h in sorted(BITRATE_MAP.keys(), reverse=True):
+        if height >= h:
+            return BITRATE_MAP[h]
+    return BITRATE_MAP[min(BITRATE_MAP.keys())]
+
+
 def compose_video(audio_metadata, media_assets, output_dir="output",
-                   fps=20, bitrate="1500k", resolution=(854, 480),
+                   fps=20, bitrate=None, resolution=(854, 480),
                    subtitles=True):
-    """
-    Compose final video from media clips and audio narration segments.
-    Subtitles are burned in via FFmpeg after initial render.
-
-    Args:
-        audio_metadata: Dict with 'segments' key (from generate_audio output)
-        media_assets: List of media asset dicts (from download_media output)
-        output_dir: Directory for final video output
-        fps: Frames per second (20 = fast render, smooth playback)
-        bitrate: Video bitrate
-        resolution: Output resolution tuple (width, height)
-
-    Returns:
-        Dict with output video metadata
-    """
     from moviepy import (
         VideoFileClip, ImageClip, AudioFileClip,
         concatenate_videoclips, ColorClip
     )
 
     target_w, target_h = resolution
+    bitrate = _resolve_bitrate(resolution, bitrate)
     assets_map = {a["segment_index"]: a for a in media_assets}
     audio_segments = audio_metadata.get("segments", [])
 
     if not audio_segments:
         raise ValueError("No audio segments found")
 
-    print(f"🎬 Composing video: {len(audio_segments)} segments @ {target_w}x{target_h}")
+    print(f"🎬 Composing video: {len(audio_segments)} segments @ {target_w}x{target_h} ({bitrate})")
 
     video_clips = []
 
@@ -63,7 +52,6 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
 
         print(f"   Segment {idx} ({duration:.1f}s)...", end=" ")
 
-        # 1. Build visual clip
         asset = assets_map.get(idx)
         clip = None
 
@@ -82,7 +70,6 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
             clip = ColorClip(size=(target_w, target_h), color=(0, 0, 0),
                              duration=duration).with_fps(fps)
 
-        # 2. Attach audio
         if os.path.exists(audio_path):
             audio_clip = AudioFileClip(audio_path)
             clip = clip.with_duration(audio_clip.duration)
@@ -91,11 +78,18 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         video_clips.append(clip)
         print("✅")
 
-    # 3. Concatenate
-    print("   Concatenating clips...")
-    final_video = concatenate_videoclips(video_clips, method="compose")
+    # Crossfade transitions
+    if len(video_clips) > 1:
+        from moviepy.video.fx import CrossFadeIn
+        for i in range(1, len(video_clips)):
+            video_clips[i] = video_clips[i].with_effects([CrossFadeIn(CROSSFADE_DURATION)])
+        final_video = concatenate_videoclips(
+            video_clips, method="compose",
+            padding=-CROSSFADE_DURATION
+        )
+    else:
+        final_video = concatenate_videoclips(video_clips, method="compose")
 
-    # 4. Export raw video (NO subtitles yet)
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     raw_path = os.path.join(output_dir, f"raw_{timestamp}.mp4")
@@ -115,7 +109,6 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         logger="bar",
     )
 
-    # Cleanup MoviePy clips immediately to free memory
     final_video.close()
     for c in video_clips:
         try:
@@ -123,7 +116,6 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         except:
             pass
 
-    # 5. Burn subtitles with FFmpeg (if enabled)
     if subtitles:
         print("   Burning subtitles with FFmpeg...")
         _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments)
@@ -131,10 +123,6 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         print("   Subtitles disabled, using raw video.")
         shutil.copy2(raw_path, output_path)
 
-    # Keep raw file for post-generation subtitle toggling
-    # (stored alongside the output)
-
-    # Output metadata
     file_size_bytes = os.path.getsize(output_path)
     file_size_mb = file_size_bytes / (1024 * 1024)
 
@@ -159,20 +147,14 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
 
 
 def _burn_subtitles_ffmpeg(input_path, output_path, audio_segments):
-    """Burn subtitles using FFmpeg subtitles filter — fast."""
-
-    # Build SRT file
     srt_path = os.path.abspath(".tmp/subtitles.srt")
     _generate_srt(audio_segments, srt_path)
 
-    # On Windows, FFmpeg subtitles filter needs forward slashes and escaped colons
+    # FFmpeg needs forward slashes and escaped colons on Windows
     srt_ffmpeg = srt_path.replace("\\", "/")
     if len(srt_ffmpeg) >= 2 and srt_ffmpeg[1] == ':':
         srt_ffmpeg = srt_ffmpeg[0] + "\\:" + srt_ffmpeg[2:]
 
-    # Semi-transparent background style (streaming-app look)
-    # BackColour=&H80000000 = 50% opacity black background
-    # BorderStyle=4 = background box with configurable opacity
     force_style = (
         "FontSize=22,FontName=Arial,PrimaryColour=&H00FFFFFF,"
         "OutlineColour=&H40000000,BackColour=&H80000000,"
@@ -199,23 +181,46 @@ def _burn_subtitles_ffmpeg(input_path, output_path, audio_segments):
 
 
 def _generate_srt(audio_segments, srt_path):
-    """Generate SRT subtitle file from audio segment timing."""
+    """Generate SRT subtitle file with word-level timing (~4 words per entry)."""
     current_time = 0.0
+    entry_num = 0
 
     with open(srt_path, "w", encoding="utf-8") as f:
-        for i, seg in enumerate(audio_segments):
-            start = current_time
-            end = current_time + seg["duration"]
+        for seg in audio_segments:
+            seg_start = current_time
+            word_timings = seg.get("word_timings", [])
 
-            f.write(f"{i + 1}\n")
-            f.write(f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n")
-            f.write(f"{seg['text']}\n\n")
+            if word_timings and len(word_timings) > 1:
+                CHUNK_SIZE = 4
+                for chunk_start_idx in range(0, len(word_timings), CHUNK_SIZE):
+                    chunk = word_timings[chunk_start_idx:chunk_start_idx + CHUNK_SIZE]
+                    if not chunk:
+                        continue
 
-            current_time = end
+                    chunk_text = " ".join(w["text"] for w in chunk)
+                    start = seg_start + chunk[0]["offset"]
+                    last_word = chunk[-1]
+                    end = seg_start + last_word["offset"] + last_word["duration"]
+
+                    if end - start < 0.3:
+                        end = start + 0.3
+
+                    entry_num += 1
+                    f.write(f"{entry_num}\n")
+                    f.write(f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n")
+                    f.write(f"{chunk_text}\n\n")
+            else:
+                start = current_time
+                end = current_time + seg["duration"]
+                entry_num += 1
+                f.write(f"{entry_num}\n")
+                f.write(f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n")
+                f.write(f"{seg['text']}\n\n")
+
+            current_time += seg["duration"]
 
 
 def _format_srt_time(seconds):
-    """Format seconds as SRT timestamp: HH:MM:SS,mmm"""
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
@@ -224,7 +229,6 @@ def _format_srt_time(seconds):
 
 
 def _process_video_clip(path, required_duration, target_w, target_h, fps):
-    """Load, resize, and adjust video clip to required duration."""
     from moviepy import VideoFileClip, concatenate_videoclips
 
     clip = VideoFileClip(path, target_resolution=(target_h, target_w))
@@ -236,7 +240,6 @@ def _process_video_clip(path, required_duration, target_w, target_h, fps):
         clip = concatenate_videoclips([clip] * num_loops)
         clip = clip.subclipped(0, required_duration)
 
-    # Ensure exact target size
     try:
         clip = clip.resized((target_w, target_h))
     except AttributeError:
@@ -246,32 +249,54 @@ def _process_video_clip(path, required_duration, target_w, target_h, fps):
 
 
 def _process_image_clip(path, required_duration, target_w, target_h, fps):
-    """Create video clip from image, resized to target."""
+    """Create video clip from image with Ken Burns zoom effect."""
     from moviepy import ImageClip
 
     clip = ImageClip(path, duration=required_duration)
 
-    try:
-        clip = clip.resized((target_w, target_h))
-    except AttributeError:
-        clip = clip.resize((target_w, target_h))
+    overscan_w = int(target_w * 1.2)
+    overscan_h = int(target_h * 1.2)
 
+    try:
+        clip = clip.resized((overscan_w, overscan_h))
+    except AttributeError:
+        clip = clip.resize((overscan_w, overscan_h))
+
+    zoom_in = random.choice([True, False])
+    if zoom_in:
+        start_scale, end_scale = 1.0, 1.15
+    else:
+        start_scale, end_scale = 1.15, 1.0
+
+    def ken_burns(get_frame, t):
+        progress = t / max(required_duration, 0.01)
+        scale = start_scale + (end_scale - start_scale) * progress
+        
+        frame = get_frame(t)
+        h, w = frame.shape[:2]
+        
+        new_w = int(target_w * scale)
+        new_h = int(target_h * scale)
+        
+        x1 = max(0, (w - new_w) // 2)
+        y1 = max(0, (h - new_h) // 2)
+        x2 = min(w, x1 + new_w)
+        y2 = min(h, y1 + new_h)
+        
+        cropped = frame[y1:y2, x1:x2]
+        
+        from PIL import Image
+        import numpy as np
+        img = Image.fromarray(cropped)
+        img = img.resize((target_w, target_h), Image.LANCZOS)
+        return np.array(img)
+
+    clip = clip.transform(ken_burns)
     return clip.with_fps(fps)
 
 
 def burn_subtitles_only(raw_path, output_path, audio_metadata):
-    """Re-burn subtitles on an existing raw video file (fast, no re-render).
-
-    Use this for post-generation subtitle toggling.
-
-    Args:
-        raw_path: Path to the raw (no-subtitles) video file
-        output_path: Path for the output video with subtitles
-        audio_metadata: Dict with 'segments' key (from generate_audio output)
-
-    Returns:
-        output_path on success
-    """
+    """Re-burn subtitles on an existing raw video (no re-render needed)."""
     audio_segments = audio_metadata.get("segments", [])
     if not audio_segments:
         raise ValueError("No audio segments for subtitle generation")

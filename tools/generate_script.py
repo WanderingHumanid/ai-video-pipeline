@@ -1,7 +1,4 @@
-"""
-Script Generation Tool
-Generates high-retention video scripts using Groq API (Llama 3.1 8B).
-"""
+"""Generates video scripts using Groq API (Llama 3.1 8B)."""
 
 import json
 import os
@@ -12,22 +9,28 @@ import datetime
 from groq import Groq
 from dotenv import load_dotenv
 
-# Fix Windows console encoding
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 load_dotenv()
 
+DURATION_PRESETS = {
+    30:  (3, "30-second",  "2-3"),
+    60:  (5, "60-second",  "3-5"),
+    90:  (7, "90-second",  "5-7"),
+    120: (9, "2-minute",   "6-9"),
+}
+
 PROMPT_TEMPLATE = """You are a professional narrator and educational scriptwriter.
 
-TASK: Write a concise 60-90 second narration script about: "{topic}"
+TASK: Write a concise {duration_label} narration script about: "{topic}"
 
 REQUIREMENTS:
 1. Opening: Start with an engaging question or compelling statement (5-8 seconds)
-2. Body: Present 3-5 clear, informative points with smooth transitions
+2. Body: Present {points_range} clear, informative points with smooth transitions
 3. Tone: Conversational yet authoritative, educational, and engaging
 4. Ending: Conclude naturally with a thoughtful closing remark or key takeaway — do NOT include any call-to-action, promotional language, or viewer engagement prompts (no "subscribe", "like", "comment", "watch more", "check out", "channel", "video", etc.)
-5. Segmentation: Break into 5-7 segments (1-3 sentences each)
+5. Segmentation: Break into {segment_count} segments (1-3 sentences each)
 6. Focus: Stay on-topic and deliver genuine insight — this is an informational narration, not a social media video
 
 For each segment, provide:
@@ -51,13 +54,13 @@ OUTPUT FORMAT (strict JSON, no markdown, no code fences):
 
 IMPORTANT: Return ONLY the raw JSON object. No markdown, no ```json fences, no extra text.
 Do NOT include any references to YouTube, subscribing, liking, commenting, or any social media engagement language.
+The total script duration MUST be approximately {target_seconds} seconds.
 
 Generate the script now for: "{topic}"
 """
 
 
-def generate_script(topic):
-    """Generate a video script for the given topic using Groq API."""
+def generate_script(topic, target_duration=60):
     if not topic or topic.strip() == "":
         raise ValueError("Topic cannot be empty")
 
@@ -67,9 +70,18 @@ def generate_script(topic):
 
     client = Groq(api_key=api_key)
 
-    prompt = PROMPT_TEMPLATE.format(topic=topic)
+    segment_count, duration_label, points_range = DURATION_PRESETS.get(
+        target_duration, DURATION_PRESETS[60]
+    )
 
-    # Attempt generation with retries
+    prompt = PROMPT_TEMPLATE.format(
+        topic=topic,
+        duration_label=duration_label,
+        segment_count=segment_count,
+        points_range=points_range,
+        target_seconds=target_duration,
+    )
+
     max_retries = 3
     last_error = None
 
@@ -77,7 +89,6 @@ def generate_script(topic):
         try:
             temperature = 0.7 if attempt == 0 else 0.5
 
-            # Respect Groq free-tier rate limits: add a small delay between retries
             if attempt > 0:
                 wait_time = 5 * attempt
                 print(f"⏳ Waiting {wait_time}s before retry...")
@@ -102,32 +113,27 @@ def generate_script(topic):
 
             raw_text = chat_completion.choices[0].message.content.strip()
 
-            # Extract JSON from potential markdown or text
             start_idx = raw_text.find('{')
             end_idx = raw_text.rfind('}')
 
             if start_idx != -1 and end_idx != -1:
                 raw_text = raw_text[start_idx:end_idx+1]
             else:
-                # Fallback to stripping fences if braces not found
                 raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                 raw_text = re.sub(r"\s*```$", "", raw_text)
 
             script_data = json.loads(raw_text)
 
-            # Validate structure
             if "full_script" not in script_data or "segments" not in script_data:
                 raise ValueError("Missing required fields in LLM response")
 
             if not script_data["segments"]:
                 raise ValueError("No segments in LLM response")
 
-            # Calculate totals
             total_duration = sum(
                 seg.get("duration_estimate", 10) for seg in script_data["segments"]
             )
 
-            # Build output object
             output = {
                 "topic": topic,
                 "full_script": script_data["full_script"],
@@ -136,7 +142,6 @@ def generate_script(topic):
                 "generated_at": datetime.datetime.now().isoformat(),
             }
 
-            # Ensure each segment has keywords (fallback to topic words)
             topic_words = topic.lower().split()
             for seg in output["segments"]:
                 if "keywords" not in seg or not seg["keywords"]:
@@ -144,7 +149,6 @@ def generate_script(topic):
                 if "duration_estimate" not in seg:
                     seg["duration_estimate"] = len(seg["text"].split()) / 2.5
 
-            # Save to .tmp
             os.makedirs(".tmp", exist_ok=True)
             with open(".tmp/script.json", "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
@@ -161,12 +165,9 @@ def generate_script(topic):
             print(f"⚠️  {last_error}")
             error_str = str(e).lower()
             if "rate_limit" in error_str or "429" in error_str or "quota" in error_str:
-                wait_time = 15 * (attempt + 1)  # 15s, 30s, 45s
+                wait_time = 15 * (attempt + 1)
                 print(f"⚠️  Rate limit hit. Waiting {wait_time}s...")
                 time.sleep(wait_time)
-            else:
-                last_error = f"Generation error (attempt {attempt + 1}): {e}"
-                print(f"⚠️  {last_error}")
 
     raise RuntimeError(f"Script generation failed after {max_retries} attempts: {last_error}")
 

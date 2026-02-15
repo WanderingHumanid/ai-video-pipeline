@@ -1,12 +1,4 @@
-"""
-AI Video Pipeline - Main Orchestrator
-Converts a topic into a production-ready YouTube video.
-
-Usage:
-    python main.py "Your Topic Here"
-    python main.py "Your Topic Here" --skip-upload
-    python main.py "Your Topic Here" --voice en-US-GuyNeural
-"""
+"""Main pipeline orchestrator — converts a topic into a video."""
 
 import json
 import os
@@ -15,11 +7,9 @@ import time
 import argparse
 import datetime
 
-# Fix Windows console encoding
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from tools.generate_script import generate_script
@@ -31,16 +21,7 @@ from tools.upload_youtube import upload_video
 from tools.cleanup import cleanup
 
 
-def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_after=False):
-    """
-    Run the full video generation pipeline.
-
-    Args:
-        topic: Video topic string
-        voice: Edge-TTS voice ID
-        skip_upload: If True, skip YouTube upload step
-        cleanup_after: If True, clean up temp files after completion
-    """
+def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_after=False, target_duration=60):
     print("=" * 60)
     print("🎬 AI Video Pipeline")
     print(f"📌 Topic: {topic}")
@@ -49,20 +30,18 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
     start_time = time.time()
     results = {}
 
-    # ──────────────── STEP 1: SCRIPT GENERATION ────────────────
     print("\n" + "─" * 40)
-    print("📝 Step 1/6: Generating script...")
+    print("📝 Step 1/5: Generating script...")
     print("─" * 40)
 
-    script_data = generate_script(topic)
+    script_data = generate_script(topic, target_duration=target_duration)
     results["script"] = {
         "segments": len(script_data["segments"]),
         "duration_estimate": script_data["total_duration_estimate"],
     }
 
-    # ──────────────── STEP 2: KEYWORD EXTRACTION ────────────────
     print("\n" + "─" * 40)
-    print("🔑 Step 2/6: Extracting keywords...")
+    print("🔑 Step 2/5: Extracting keywords...")
     print("─" * 40)
 
     keywords_data = extract_keywords_from_segments(script_data)
@@ -70,9 +49,8 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
         "total_unique": len(keywords_data["all_keywords"]),
     }
 
-    # ──────────────── STEP 3: AUDIO GENERATION ────────────────
     print("\n" + "─" * 40)
-    print("🎤 Step 3/6: Generating audio narration...")
+    print("🎤 Step 3/5: Generating audio...")
     print("─" * 40)
 
     audio_data = generate_audio(script_data, voice=voice)
@@ -81,9 +59,8 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
         "voice": audio_data["voice"],
     }
 
-    # ──────────────── STEP 4: MEDIA SOURCING ────────────────
     print("\n" + "─" * 40)
-    print("📥 Step 4/6: Downloading media assets...")
+    print("📥 Step 4/5: Downloading media...")
     print("─" * 40)
 
     media_data = download_media(keywords_data, audio_duration=audio_data["duration"])
@@ -92,9 +69,8 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
         "sourced": sum(1 for a in media_data["media_assets"] if a["source"] != "none"),
     }
 
-    # ──────────────── STEP 5: VIDEO COMPOSITION ────────────────
     print("\n" + "─" * 40)
-    print("🎬 Step 5/6: Composing video...")
+    print("🎬 Step 5/5: Composing video...")
     print("─" * 40)
 
     video_data = compose_video(
@@ -107,10 +83,9 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
         "duration": video_data["duration"],
     }
 
-    # ──────────────── STEP 6: YOUTUBE UPLOAD ────────────────
     if not skip_upload:
         print("\n" + "─" * 40)
-        print("📤 Step 6/6: Uploading to YouTube...")
+        print("📤 Optional: Uploading to YouTube...")
         print("─" * 40)
 
         try:
@@ -131,7 +106,6 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
         print("\n⏭️  Skipping YouTube upload (--skip-upload)")
         results["upload"] = {"status": "skipped"}
 
-    # ──────────────── SUMMARY ────────────────
     elapsed = time.time() - start_time
     minutes = int(elapsed // 60)
     seconds = int(elapsed % 60)
@@ -152,7 +126,6 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
     else:
         print(f"📤 YouTube: {results['upload']['status']}")
 
-    # Save run summary
     os.makedirs(".tmp", exist_ok=True)
     results["pipeline"] = {
         "topic": topic,
@@ -162,7 +135,6 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
     with open(".tmp/pipeline_summary.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
-    # Cleanup
     if cleanup_after:
         print("\n🧹 Cleaning up temporary files...")
         cleanup()
@@ -171,11 +143,13 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Video Pipeline - Topic to YouTube")
-    parser.add_argument("topic", help="Video topic (e.g., 'The Science Behind Black Holes')")
+    parser = argparse.ArgumentParser(description="AI Video Pipeline")
+    parser.add_argument("topic", help="Video topic")
     parser.add_argument("--voice", default="en-US-AriaNeural", help="Edge-TTS voice ID")
     parser.add_argument("--skip-upload", action="store_true", help="Skip YouTube upload")
-    parser.add_argument("--cleanup", action="store_true", help="Clean up temp files after completion")
+    parser.add_argument("--cleanup", action="store_true", help="Clean up temp files after")
+    parser.add_argument("--duration", type=int, default=60, choices=[30, 60, 90, 120],
+                        help="Target duration in seconds (default: 60)")
 
     args = parser.parse_args()
 
@@ -184,6 +158,7 @@ def main():
         voice=args.voice,
         skip_upload=args.skip_upload,
         cleanup_after=args.cleanup,
+        target_duration=args.duration,
     )
 
 

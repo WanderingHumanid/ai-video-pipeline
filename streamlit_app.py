@@ -6,7 +6,6 @@ import time
 import datetime
 from dotenv import load_dotenv
 
-# Add project root to path for direct imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 load_dotenv()
@@ -36,8 +35,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Voice configuration ─────────────────────────────────────────────────────
-
 VOICES = {
     "en-US-AriaNeural":        ("🇺🇸 Aria — Female, American",   "static/voices/aria.mp3"),
     "en-US-ChristopherNeural": ("🇺🇸 Christopher — Male, American", "static/voices/christopher.mp3"),
@@ -45,15 +42,18 @@ VOICES = {
     "en-GB-RyanNeural":        ("🇬🇧 Ryan — Male, British",      "static/voices/ryan.mp3"),
 }
 
-# ── Resolution presets ──────────────────────────────────────────────────────
-
 RESOLUTIONS = {
     "480p (SD) — ~2-3 min":      (854, 480),
     "720p (HD) — ~4-6 min":      (1280, 720),
     "1080p (Full HD) — ~8-12 min": (1920, 1080),
 }
 
-# ── Sidebar ──────────────────────────────────────────────────────────────────
+DURATION_OPTIONS = {
+    "30s — Quick short":    30,
+    "60s — Standard":       60,
+    "90s — Extended":       90,
+    "2min — In-depth":      120,
+}
 
 with st.sidebar:
     st.header("⚙️ Configuration")
@@ -74,18 +74,14 @@ with st.sidebar:
     st.markdown("---")
     st.caption("💡 Ensure `.env` is configured before running.")
 
-# ── Main Page ────────────────────────────────────────────────────────────────
-
 st.title("🎬 AI Video Generator")
-st.caption("Zero-Shot Text-to-Video Pipeline")
 st.markdown("---")
 
 topic = st.text_input(
     "📝 Enter a topic for your video",
-    placeholder="e.g., The Future of AI, History of Rome, Quantum Physics..."
+    placeholder="Give a simple prompt. The AI will generate the script for you."
 )
 
-# ── Voice selector ───────────────────────────────────────────────────────
 with st.expander("🎙️ Voice Selection"):
     voice_id = st.radio(
         "Choose a narration voice:",
@@ -100,7 +96,6 @@ with st.expander("🎙️ Voice Selection"):
         st.audio(preview_path, format="audio/mp3")
     st.caption(f"Selected: **{VOICES[voice_id][0]}**")
 
-# ── Resolution selector ─────────────────────────────────────────────────
 with st.expander("📐 Resolution"):
     resolution_label = st.radio(
         "Choose output resolution:",
@@ -110,33 +105,32 @@ with st.expander("📐 Resolution"):
         label_visibility="collapsed",
     )
     selected_resolution = RESOLUTIONS[resolution_label]
-    st.caption(f"Selected: **{selected_resolution[0]}×{selected_resolution[1]}** — estimated render time shown above")
+    st.caption(f"Selected: **{selected_resolution[0]}×{selected_resolution[1]}**")
 
-# ── Subtitle toggle ─────────────────────────────────────────────────────
+with st.expander("⏱️ Video Duration"):
+    duration_label = st.radio(
+        "Choose target duration:",
+        options=list(DURATION_OPTIONS.keys()),
+        index=1,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    target_duration = DURATION_OPTIONS[duration_label]
+    st.caption(f"Selected: **{target_duration}s**")
+
 enable_subtitles = st.toggle("🔤 Enable Subtitles", value=True)
+review_script = st.toggle("✏️ Review & edit script before generating", value=False)
 
-# ── Generate ─────────────────────────────────────────────────────────────
 can_generate = bool(topic and pexels_api and groq_api)
-generate_btn = st.button("🚀 Generate Video", type="primary", disabled=not can_generate)
 
-if generate_btn:
-    progress = st.progress(0, text="Starting pipeline...")
-    status = st.empty()
-    start_time = time.time()
+
+def _run_pipeline_after_script(script_data):
+    """Run the pipeline from keywords onward."""
+    progress = st.session_state.get("_progress")
+    status = st.session_state.get("_status")
+    start_time = st.session_state.get("_start_time", time.time())
 
     try:
-        # ── Step 1: Script Generation ────────────────────────────────────
-        progress.progress(5, text="📝 Generating script...")
-        status.info("📝 Generating script with Groq (Llama 3.1)...")
-
-        from tools.generate_script import generate_script
-        script_data = generate_script(topic)
-
-        seg_count = len(script_data["segments"])
-        est_dur = script_data["total_duration_estimate"]
-        status.success(f"✅ Script: {seg_count} segments, ~{est_dur:.0f}s estimated")
-
-        # ── Step 2: Keyword Extraction ───────────────────────────────────
         progress.progress(15, text="🔍 Extracting keywords...")
         status.info("🔍 Extracting visual keywords...")
 
@@ -146,7 +140,6 @@ if generate_btn:
         kw_count = len(keywords_data["all_keywords"])
         status.success(f"✅ Keywords: {kw_count} unique visual keywords extracted")
 
-        # ── Step 3: Audio Generation ─────────────────────────────────────
         progress.progress(25, text="🗣️ Synthesizing voiceover...")
         status.info(f"🗣️ Generating voiceover ({VOICES[voice_id][0]})...")
 
@@ -156,7 +149,6 @@ if generate_btn:
         audio_dur = audio_data["duration"]
         status.success(f"✅ Audio: {audio_dur:.1f}s voiceover generated")
 
-        # ── Step 4: Media Download ───────────────────────────────────────
         progress.progress(40, text="⬇️ Downloading media...")
         status.info("⬇️ Downloading stock footage from Pexels...")
 
@@ -167,7 +159,6 @@ if generate_btn:
         total = len(media_data["media_assets"])
         status.success(f"✅ Media: {sourced}/{total} segments sourced")
 
-        # ── Step 5: Video Composition ────────────────────────────────────
         progress.progress(65, text="🎬 Rendering final video...")
         status.info("🎬 Rendering video — this may take a few minutes...")
 
@@ -179,7 +170,6 @@ if generate_btn:
             subtitles=enable_subtitles,
         )
 
-        # ── Done! ────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
         mins = int(elapsed // 60)
         secs = int(elapsed % 60)
@@ -190,11 +180,9 @@ if generate_btn:
             f"({video_data['file_size_mb']:.1f} MB, {video_data['duration']:.1f}s)"
         )
 
-        # Store generation data in session state for post-gen subtitle toggling
         st.session_state["last_video_data"] = video_data
         st.session_state["last_audio_data"] = audio_data
 
-        # Show video
         video_path = video_data["video_path"]
         if os.path.exists(video_path):
             st.video(video_path)
@@ -210,12 +198,104 @@ if generate_btn:
         progress.empty()
         elapsed = time.time() - start_time
         st.error(f"❌ Pipeline failed after {elapsed:.0f}s: {e}")
-        # Show traceback in expander for debugging
         import traceback
         with st.expander("🔍 Error Details"):
             st.code(traceback.format_exc())
 
-# ── Post-generation subtitle toggle ──────────────────────────────────────
+
+generate_btn = st.button("🚀 Generate Video", type="primary", disabled=not can_generate)
+
+if generate_btn:
+    progress = st.progress(0, text="Starting pipeline...")
+    status = st.empty()
+    start_time = time.time()
+
+    st.session_state["_progress"] = progress
+    st.session_state["_status"] = status
+    st.session_state["_start_time"] = start_time
+
+    progress.progress(5, text="📝 Generating script...")
+    status.info("📝 Generating script...")
+
+    from tools.generate_script import generate_script
+    script_data = generate_script(topic, target_duration=target_duration)
+
+    seg_count = len(script_data["segments"])
+    est_dur = script_data["total_duration_estimate"]
+    status.success(f"✅ Script: {seg_count} segments, ~{est_dur:.0f}s estimated")
+
+    if review_script:
+        st.session_state["pending_script"] = script_data
+        st.session_state["script_topic"] = topic
+        st.rerun()
+    else:
+        _run_pipeline_after_script(script_data)
+
+
+if "pending_script" in st.session_state:
+    script_data = st.session_state["pending_script"]
+
+    st.markdown("---")
+    st.subheader("✏️ Review & Edit Script")
+    st.caption("Edit the narration text below, then click **Continue** to proceed.")
+
+    edited_segments = []
+    for i, seg in enumerate(script_data["segments"]):
+        with st.expander(f"Segment {i + 1} — ~{seg.get('duration_estimate', '?')}s", expanded=True):
+            text = st.text_area(
+                f"Narration text (Segment {i + 1})",
+                value=seg["text"],
+                height=80,
+                key=f"seg_text_{i}",
+                label_visibility="collapsed",
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                vsq = st.text_input(
+                    "Visual search query",
+                    value=seg.get("visual_search_query", ""),
+                    key=f"seg_vsq_{i}",
+                )
+            with col2:
+                kws = st.text_input(
+                    "Keywords (comma-separated)",
+                    value=", ".join(seg.get("keywords", [])),
+                    key=f"seg_kws_{i}",
+                )
+
+            edited_segments.append({
+                **seg,
+                "text": text,
+                "visual_search_query": vsq,
+                "keywords": [k.strip() for k in kws.split(",") if k.strip()],
+            })
+
+    col_continue, col_cancel = st.columns([1, 1])
+
+    with col_continue:
+        if st.button("✅ Continue with this script", type="primary"):
+            script_data["segments"] = edited_segments
+            script_data["full_script"] = " ".join(s["text"] for s in edited_segments)
+
+            os.makedirs(".tmp", exist_ok=True)
+            with open(".tmp/script.json", "w", encoding="utf-8") as f:
+                json.dump(script_data, f, indent=2, ensure_ascii=False)
+
+            del st.session_state["pending_script"]
+
+            progress = st.progress(10, text="Continuing pipeline...")
+            status = st.empty()
+            st.session_state["_progress"] = progress
+            st.session_state["_status"] = status
+            st.session_state["_start_time"] = time.time()
+
+            _run_pipeline_after_script(script_data)
+
+    with col_cancel:
+        if st.button("❌ Cancel"):
+            del st.session_state["pending_script"]
+            st.rerun()
+
 
 if "last_video_data" in st.session_state and "last_audio_data" in st.session_state:
     vd = st.session_state["last_video_data"]
@@ -224,7 +304,7 @@ if "last_video_data" in st.session_state and "last_audio_data" in st.session_sta
 
     if raw_path and os.path.exists(raw_path):
         st.markdown("---")
-        st.markdown("#### 🔄 Post-Generation Subtitle Toggle")
+        st.markdown("#### 🔄 Re-render Subtitles")
 
         if has_subs:
             toggle_label = "🔇 Re-render **without** subtitles"
@@ -232,23 +312,19 @@ if "last_video_data" in st.session_state and "last_audio_data" in st.session_sta
             toggle_label = "🔤 Re-render **with** subtitles"
 
         if st.button(toggle_label):
-            with st.spinner("Re-rendering subtitles (~10s)..."):
+            with st.spinner("Re-rendering (~10s)..."):
                 import shutil
-                # Generate new output path
                 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
                 new_output = os.path.join(os.path.dirname(raw_path), f"video_{timestamp}.mp4")
 
                 if has_subs:
-                    # Remove subtitles: just copy the raw file
                     shutil.copy2(raw_path, new_output)
                     new_subs = False
                 else:
-                    # Add subtitles
                     from tools.compose_video import burn_subtitles_only
                     burn_subtitles_only(raw_path, new_output, st.session_state["last_audio_data"])
                     new_subs = True
 
-                # Update session state
                 st.session_state["last_video_data"]["video_path"] = new_output
                 st.session_state["last_video_data"]["subtitles_enabled"] = new_subs
                 st.session_state["last_video_data"]["file_size_mb"] = round(
@@ -266,4 +342,3 @@ if "last_video_data" in st.session_state and "last_audio_data" in st.session_sta
                 )
 
 st.markdown("---")
-st.caption("Powered by Groq (Llama 3.1) · Pexels · Edge-TTS · MoviePy")

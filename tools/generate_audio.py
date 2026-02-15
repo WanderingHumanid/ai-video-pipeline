@@ -1,7 +1,4 @@
-"""
-Audio Generation Tool
-Converts script text to MP3 audio using Edge-TTS.
-"""
+"""Converts script text to MP3 using Edge-TTS."""
 
 import asyncio
 import json
@@ -9,31 +6,40 @@ import os
 import sys
 import datetime
 
-# Fix Windows console encoding
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 
 async def _generate_tts(text, voice, output_path, rate="+0%"):
-    """Generate audio using Edge-TTS."""
     import edge_tts
-
     communicate = edge_tts.Communicate(text, voice, rate=rate)
     await communicate.save(output_path)
 
 
+def _synthesize_word_timings(text, duration):
+    """Distribute audio duration across words proportionally by character length."""
+    words = text.split()
+    if not words or duration <= 0:
+        return []
+
+    char_counts = [max(len(w), 1) for w in words]
+    total_chars = sum(char_counts)
+
+    timings = []
+    current_offset = 0.0
+    for word, ccount in zip(words, char_counts):
+        word_dur = (ccount / total_chars) * duration
+        timings.append({
+            "text": word,
+            "offset": round(current_offset, 4),
+            "duration": round(word_dur, 4),
+        })
+        current_offset += word_dur
+
+    return timings
+
+
 def generate_audio(script_data, voice="en-US-AriaNeural", rate="+0%"):
-    """
-    Generate audio narration from script text.
-
-    Args:
-        script_data: Dict with 'full_script' key (from generate_script output)
-        voice: Edge-TTS voice ID
-        rate: Speaking rate adjustment (e.g., "+10%", "-5%")
-
-    Returns:
-        Dict with audio metadata including path, duration, and voice
-    """
     full_script = script_data.get("full_script", "")
     segments = script_data.get("segments", [])
 
@@ -45,7 +51,6 @@ def generate_audio(script_data, voice="en-US-AriaNeural", rate="+0%"):
     
     audio_segments = []
     
-    # Generate audio for each segment
     print(f"🎤 Generating audio for {len(segments)} segments...")
     
     for i, segment in enumerate(segments):
@@ -57,22 +62,22 @@ def generate_audio(script_data, voice="en-US-AriaNeural", rate="+0%"):
         
         if os.path.exists(segment_path):
             duration = _measure_duration(segment_path, text)
+            word_timings = _synthesize_word_timings(text, duration)
             audio_segments.append({
                 "index": i,
                 "text": text,
                 "file_path": segment_path,
-                "duration": duration
+                "duration": duration,
+                "word_timings": word_timings,
             })
         else:
             raise RuntimeError(f"Failed to generate audio for segment {i}")
 
-    # Calculate total duration from segments (no need to merge into single file
-    # since compose_video uses individual segment files)
     total_duration = sum(seg["duration"] for seg in audio_segments)
 
     output = {
         "script": full_script,
-        "local_path": "",  # Individual segment files are used directly
+        "local_path": "",
         "duration": round(total_duration, 2),
         "segments": audio_segments,
         "voice": voice,
@@ -86,22 +91,14 @@ def generate_audio(script_data, voice="en-US-AriaNeural", rate="+0%"):
     return output
 
 
-def _generate_long_script(text, voice, output_path, rate):
-    # Deprecated in favor of segment-based generation, but keeping for fallback
-    pass 
-
-
-
 def _measure_duration(audio_path, fallback_text=""):
-    """Measure audio duration using pydub, with word-count fallback."""
     try:
         from pydub import AudioSegment
         audio = AudioSegment.from_mp3(audio_path)
         return len(audio) / 1000.0
-    except Exception as e:
-        print(f"⚠️  Duration measurement failed ({e}), using word-count estimate")
+    except Exception:
         word_count = len(fallback_text.split())
-        return word_count / 2.5  # ~2.5 words per second
+        return word_count / 2.5
 
 
 if __name__ == "__main__":

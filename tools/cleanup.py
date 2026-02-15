@@ -1,14 +1,9 @@
-"""
-Cleanup Tool
-Manages temporary files generated during the video pipeline.
-"""
+"""Manages temporary files generated during the pipeline."""
 
 import os
 import sys
 import shutil
-import glob
 
-# Fix Windows console encoding
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
@@ -16,14 +11,7 @@ TMP_DIR = ".tmp"
 
 
 def cleanup(keep_output=True):
-    """
-    Remove temporary files from .tmp/ directory.
-
-    Args:
-        keep_output: If True, keeps the output/ directory intact
-    """
     if os.path.exists(TMP_DIR):
-        # Calculate size before cleanup
         total_size = 0
         file_count = 0
         for root, dirs, files in os.walk(TMP_DIR):
@@ -41,7 +29,6 @@ def cleanup(keep_output=True):
 
 
 def cleanup_media_only():
-    """Remove only downloaded media files (largest files)."""
     media_dir = os.path.join(TMP_DIR, "media")
     if os.path.exists(media_dir):
         count = len(os.listdir(media_dir))

@@ -1,7 +1,4 @@
-"""
-YouTube Upload Tool
-Uploads rendered video to YouTube via Data API v3 with OAuth2.
-"""
+"""Uploads rendered video to YouTube via Data API v3 with OAuth2."""
 
 import json
 import os
@@ -9,16 +6,11 @@ import sys
 import datetime
 import pickle
 
-# Fix Windows console encoding
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 
 def authenticate():
-    """
-    Authenticate with YouTube API using OAuth2.
-    First-time use requires browser authorization.
-    """
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -30,12 +22,10 @@ def authenticate():
     os.makedirs(".tmp", exist_ok=True)
     token_path = ".tmp/youtube_token.pickle"
 
-    # Load saved credentials
     if os.path.exists(token_path):
         with open(token_path, "rb") as token:
             creds = pickle.load(token)
 
-    # Refresh or get new credentials
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
@@ -55,7 +45,6 @@ def authenticate():
             flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
             creds = flow.run_local_server(port=8080)
 
-        # Save credentials
         with open(token_path, "wb") as token:
             pickle.dump(creds, token)
 
@@ -64,10 +53,8 @@ def authenticate():
 
 
 def generate_metadata(topic, media_assets=None):
-    """Generate YouTube video metadata from topic and media attributions."""
     title = topic[:100]
 
-    # Build attribution list
     attributions = []
     if media_assets:
         for asset in media_assets:
@@ -82,35 +69,21 @@ def generate_metadata(topic, media_assets=None):
         f"---\n"
         f"Stock footage credits:\n"
         f"{attribution_text}\n\n"
-        f"Powered by Pexels\n"
-        f"Generated with AI automation"
+        f"Powered by Pexels"
     )
 
-    # Extract tags from topic
     tags = [w.strip() for w in topic.split() if len(w.strip()) > 2][:15]
 
     return {
         "title": title,
-        "description": description[:5000],  # YouTube limit
+        "description": description[:5000],
         "tags": tags,
-        "category_id": "28",  # Science & Technology
-        "privacy_status": "unlisted",  # Safe default
+        "category_id": "28",
+        "privacy_status": "unlisted",
     }
 
 
 def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
-    """
-    Upload video to YouTube.
-
-    Args:
-        video_path: Path to the rendered .mp4 file
-        topic: Video topic (used for title/description)
-        media_assets: List of media asset dicts (for attributions)
-        privacy: Privacy status (public/unlisted/private)
-
-    Returns:
-        Dict with YouTube URL and upload status
-    """
     from googleapiclient.http import MediaFileUpload
 
     if not os.path.exists(video_path):
@@ -118,17 +91,14 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
 
     print(f"🎥 Preparing upload: {video_path}")
 
-    # Authenticate
     youtube = authenticate()
 
-    # Generate metadata
     metadata = generate_metadata(topic, media_assets)
     metadata["privacy_status"] = privacy
 
     print(f"   Title: {metadata['title']}")
     print(f"   Privacy: {metadata['privacy_status']}")
 
-    # Build request body
     body = {
         "snippet": {
             "title": metadata["title"],
@@ -142,7 +112,6 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
         },
     }
 
-    # Upload with resumable media
     media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
 
     request = youtube.videos().insert(
@@ -194,7 +163,6 @@ if __name__ == "__main__":
     topic = sys.argv[2] if len(sys.argv) > 2 else "AI Generated Video"
 
     if not video_path:
-        # Try to find from output metadata
         meta_path = ".tmp/output_metadata.json"
         if os.path.exists(meta_path):
             with open(meta_path, "r") as f:
@@ -204,7 +172,6 @@ if __name__ == "__main__":
             print("❌ No video path provided and no output metadata found.")
             sys.exit(1)
 
-    # Load media assets for attribution
     media_assets = None
     assets_path = ".tmp/media_assets.json"
     if os.path.exists(assets_path):
