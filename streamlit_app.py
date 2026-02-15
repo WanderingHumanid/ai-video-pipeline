@@ -363,6 +363,7 @@ if "last_video_data" in st.session_state:
         # Tab 2: YouTube Upload
         with tab2:
             st.info("ℹ️ To enable uploading, configure your **YouTube API Keys** in the sidebar.")
+            st.warning("⚠️ **Note**: YouTube Upload currently works only when running the app **locally**. Cloud support is planned for a future update.")
             privacy = st.selectbox("Privacy", ["unlisted", "private", "public"])
             
             if st.button("Upload to YouTube", disabled=not can_upload):
@@ -416,3 +417,4 @@ if "last_video_data" in st.session_state:
                     st.rerun()
 
 st.markdown("---")
+st.caption("⚠️ **Note on Resource Usage**: Video rendering is CPU-intensive. Since I'm running this on a free cloud hosting server, I recommend keeping the videos short with low resolution or it might crash the app :)")
