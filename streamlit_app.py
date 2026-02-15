@@ -64,7 +64,7 @@ with st.sidebar:
     
     # User-Friendly Auth (Input Fields)
     st.subheader("YouTube Upload Setup")
-    
+    st.warning("⚠️ **Note**: YouTube Upload currently works only when running the app **locally**. Cloud support is planned for a future update.")
     with st.expander(" How to get API Keys"):
         st.markdown("""
         ### Why do I need this?
@@ -165,15 +165,15 @@ with st.expander("⏱️ Video Duration"):
     duration_label = st.radio(
         "Choose target duration:",
         options=list(DURATION_OPTIONS.keys()),
-        index=1,
+        index=0,
         horizontal=True,
         label_visibility="collapsed",
     )
     target_duration = DURATION_OPTIONS[duration_label]
     st.caption(f"Selected: **{target_duration}s**")
 
-enable_subtitles = st.toggle("🔤 Enable Subtitles (Burned in)", value=True)
-review_script = st.toggle("✏️ Review & edit script before generating", value=False)
+enable_subtitles = st.toggle("🔤 Enable Subtitles (Burned in)", value=False)
+review_script = st.toggle("✏️ Review & edit script before generating", value=True)
 
 can_generate = bool(topic and pexels_api and groq_api)
 
