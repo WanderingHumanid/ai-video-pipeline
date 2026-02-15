@@ -18,16 +18,17 @@ sys.stderr.reconfigure(encoding='utf-8')
 
 load_dotenv()
 
-PROMPT_TEMPLATE = """You are a YouTube scriptwriter specializing in high-retention short-form content.
+PROMPT_TEMPLATE = """You are a professional narrator and educational scriptwriter.
 
-TASK: Write a 60-90 second video script on the topic: "{topic}"
+TASK: Write a concise 60-90 second narration script about: "{topic}"
 
 REQUIREMENTS:
-1. Hook: Start with an attention-grabbing question or bold statement (5 seconds)
-2. Structure: 3-5 clear, concise points with smooth transitions
-3. Tone: Conversational, energetic, educational
-4. Call-to-Action: End with a subscribe prompt or teaser (5 seconds)
+1. Opening: Start with an engaging question or compelling statement (5-8 seconds)
+2. Body: Present 3-5 clear, informative points with smooth transitions
+3. Tone: Conversational yet authoritative, educational, and engaging
+4. Ending: Conclude naturally with a thoughtful closing remark or key takeaway — do NOT include any call-to-action, promotional language, or viewer engagement prompts (no "subscribe", "like", "comment", "watch more", "check out", "channel", "video", etc.)
 5. Segmentation: Break into 5-7 segments (1-3 sentences each)
+6. Focus: Stay on-topic and deliver genuine insight — this is an informational narration, not a social media video
 
 For each segment, provide:
 - The narration text
@@ -49,6 +50,7 @@ OUTPUT FORMAT (strict JSON, no markdown, no code fences):
 }}
 
 IMPORTANT: Return ONLY the raw JSON object. No markdown, no ```json fences, no extra text.
+Do NOT include any references to YouTube, subscribing, liking, commenting, or any social media engagement language.
 
 Generate the script now for: "{topic}"
 """

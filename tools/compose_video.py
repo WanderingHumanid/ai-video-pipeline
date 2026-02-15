@@ -23,7 +23,8 @@ sys.stderr.reconfigure(encoding='utf-8')
 
 
 def compose_video(audio_metadata, media_assets, output_dir="output",
-                   fps=20, bitrate="1500k", resolution=(854, 480)):
+                   fps=20, bitrate="1500k", resolution=(854, 480),
+                   subtitles=True):
     """
     Compose final video from media clips and audio narration segments.
     Subtitles are burned in via FFmpeg after initial render.
@@ -122,15 +123,16 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         except:
             pass
 
-    # 5. Burn subtitles with FFmpeg (fast re-encode)
-    print("   Burning subtitles with FFmpeg...")
-    _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments)
+    # 5. Burn subtitles with FFmpeg (if enabled)
+    if subtitles:
+        print("   Burning subtitles with FFmpeg...")
+        _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments)
+    else:
+        print("   Subtitles disabled, using raw video.")
+        shutil.copy2(raw_path, output_path)
 
-    # Remove raw file
-    try:
-        os.remove(raw_path)
-    except:
-        pass
+    # Keep raw file for post-generation subtitle toggling
+    # (stored alongside the output)
 
     # Output metadata
     file_size_bytes = os.path.getsize(output_path)
@@ -138,11 +140,13 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
 
     output_meta = {
         "video_path": output_path,
+        "raw_path": raw_path,
         "file_size_mb": round(file_size_mb, 2),
         "duration": round(total_duration, 2),
         "resolution": f"{target_w}x{target_h}",
         "fps": fps,
         "codec": "libx264",
+        "subtitles_enabled": subtitles,
         "created_at": datetime.datetime.now().isoformat(),
     }
 
@@ -166,10 +170,19 @@ def _burn_subtitles_ffmpeg(input_path, output_path, audio_segments):
     if len(srt_ffmpeg) >= 2 and srt_ffmpeg[1] == ':':
         srt_ffmpeg = srt_ffmpeg[0] + "\\:" + srt_ffmpeg[2:]
 
+    # Semi-transparent background style (streaming-app look)
+    # BackColour=&H80000000 = 50% opacity black background
+    # BorderStyle=4 = background box with configurable opacity
+    force_style = (
+        "FontSize=22,FontName=Arial,PrimaryColour=&H00FFFFFF,"
+        "OutlineColour=&H40000000,BackColour=&H80000000,"
+        "BorderStyle=4,Outline=0,Shadow=0,Alignment=2,MarginV=30"
+    )
+
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
-        "-vf", f"subtitles='{srt_ffmpeg}':force_style='FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2,Shadow=1,Alignment=2,MarginV=25,FontName=Arial'",
+        "-vf", f"subtitles='{srt_ffmpeg}':force_style='{force_style}'",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-c:a", "copy",
@@ -244,6 +257,32 @@ def _process_image_clip(path, required_duration, target_w, target_h, fps):
         clip = clip.resize((target_w, target_h))
 
     return clip.with_fps(fps)
+
+
+def burn_subtitles_only(raw_path, output_path, audio_metadata):
+    """Re-burn subtitles on an existing raw video file (fast, no re-render).
+
+    Use this for post-generation subtitle toggling.
+
+    Args:
+        raw_path: Path to the raw (no-subtitles) video file
+        output_path: Path for the output video with subtitles
+        audio_metadata: Dict with 'segments' key (from generate_audio output)
+
+    Returns:
+        output_path on success
+    """
+    audio_segments = audio_metadata.get("segments", [])
+    if not audio_segments:
+        raise ValueError("No audio segments for subtitle generation")
+
+    print(f"   Re-burning subtitles on {raw_path}...")
+    _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments)
+
+    if os.path.exists(output_path):
+        file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        print(f"✅ Subtitles burned: {output_path} ({file_size_mb:.1f} MB)")
+    return output_path
 
 
 if __name__ == "__main__":
