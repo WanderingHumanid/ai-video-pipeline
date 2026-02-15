@@ -98,7 +98,7 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
     print("─" * 40)
 
     video_data = compose_video(
-        audio_path=audio_data["local_path"],
+        audio_metadata=audio_data,
         media_assets=media_data["media_assets"],
     )
     results["video"] = {

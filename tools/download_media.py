@@ -19,7 +19,7 @@ load_dotenv()
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 BASE_URL = "https://api.pexels.com/"
 HEADERS = {"Authorization": PEXELS_API_KEY} if PEXELS_API_KEY else {}
-REQUEST_DELAY = 0.5  # Seconds between API requests (rate limit safety)
+REQUEST_DELAY = 0.2  # Seconds between API requests (Pexels allows 20k/month)
 
 # Category generic fallbacks for Tier 2
 CATEGORY_GENERICS = {
@@ -228,7 +228,7 @@ def _select_best_video(videos, min_duration):
     chosen_file = None
     for vf in video_files:
         w = vf.get("width", 0)
-        if 720 <= w <= 1920 and vf.get("file_type", "") == "video/mp4":
+        if 480 <= w <= 1280 and vf.get("file_type", "") == "video/mp4":
             chosen_file = vf
             break
 
@@ -256,7 +256,7 @@ def _download_file(url, segment_index, media_type):
             response.raise_for_status()
 
             with open(local_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=65536):
                     f.write(chunk)
 
             return local_path

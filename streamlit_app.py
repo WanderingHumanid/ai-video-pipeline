@@ -1,9 +1,13 @@
 import streamlit as st
 import os
-import subprocess
+import sys
 import json
 import time
+import datetime
 from dotenv import load_dotenv
+
+# Add project root to path for direct imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 load_dotenv()
 
@@ -32,50 +36,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Helper ──────────────────────────────────────────────────────────────────
+# ── Voice configuration ─────────────────────────────────────────────────────
 
-TIMEOUT_PER_STEP = {
-    "Script Generation": 90,
-    "Keyword Extraction": 60,
-    "Media Download": 120,
-    "Audio Generation": 120,
-    "Video Composition": 180,
-}
-
-def run_pipeline_step(command, args, step_name):
-    """Run a pipeline step as a subprocess with a timeout."""
-    cmd = command.split() + args
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-
-    timeout = TIMEOUT_PER_STEP.get(step_name, 120)
-
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding='utf-8',
-        env=env
-    )
-
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.communicate()
-        raise RuntimeError(
-            f"{step_name} timed out after {timeout}s. "
-            f"This usually means the API is rate-limited. Try again in a minute."
-        )
-
-    if process.returncode != 0:
-        raise RuntimeError(f"{step_name} failed:\n{stderr}\n{stdout}")
-
-    return stdout
-
-
-# Voice configuration (labels only — previews are in the expander)
 VOICES = {
     "en-US-AriaNeural":        ("🇺🇸 Aria — Female, American",   "static/voices/aria.mp3"),
     "en-US-ChristopherNeural": ("🇺🇸 Christopher — Male, American", "static/voices/christopher.mp3"),
@@ -83,28 +45,28 @@ VOICES = {
     "en-GB-RyanNeural":        ("🇬🇧 Ryan — Male, British",      "static/voices/ryan.mp3"),
 }
 
-# ── Sidebar (minimal) ──────────────────────────────────────────────────────
+# ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.header("⚙️ Configuration")
 
     pexels_api = os.getenv("PEXELS_API_KEY")
-    gemini_api = os.getenv("GEMINI_API_KEY")
+    groq_api = os.getenv("GROQ_API_KEY")
 
     if pexels_api:
         st.success("✅ Pexels API Key")
     else:
         st.error("❌ Pexels API Key missing")
 
-    if gemini_api:
-        st.success("✅ Gemini API Key")
+    if groq_api:
+        st.success("✅ Groq API Key")
     else:
-        st.error("❌ Gemini API Key missing")
+        st.error("❌ Groq API Key missing")
 
     st.markdown("---")
     st.caption("💡 Ensure `.env` is configured before running.")
 
-# ── Main Page ───────────────────────────────────────────────────────────────
+# ── Main Page ────────────────────────────────────────────────────────────────
 
 st.title("🎬 AI Video Generator")
 st.caption("Zero-Shot Text-to-Video Pipeline")
@@ -118,9 +80,8 @@ with col1:
         placeholder="e.g., The Future of AI, History of Rome, Quantum Physics..."
     )
 
-    # ── Voice selector: simple radio + preview ──────────────────────────────
+    # ── Voice selector ───────────────────────────────────────────────────────
     with st.expander("🎙️ Voice Selection"):
-
         voice_id = st.radio(
             "Choose a narration voice:",
             options=list(VOICES.keys()),
@@ -129,59 +90,104 @@ with col1:
             label_visibility="collapsed",
         )
 
-        # Show preview for the selected voice
         preview_path = VOICES[voice_id][1]
         if os.path.exists(preview_path):
             st.audio(preview_path, format="audio/mp3")
         st.caption(f"Selected: **{VOICES[voice_id][0]}**")
 
-    # ── Generate ────────────────────────────────────────────────────────────
-    can_generate = bool(topic and pexels_api and gemini_api)
+    # ── Generate ─────────────────────────────────────────────────────────────
+    can_generate = bool(topic and pexels_api and groq_api)
     generate_btn = st.button("🚀 Generate Video", type="primary", disabled=not can_generate)
 
     if generate_btn:
         progress = st.progress(0, text="Starting pipeline...")
         status = st.empty()
-
-        steps = [
-            (10,  "📝 Generating script...",       "python tools/generate_script.py", [topic],    "Script Generation"),
-            (25,  "🔍 Extracting keywords...",     "python tools/extract_keywords.py", [],        "Keyword Extraction"),
-            (40,  "⬇️ Downloading media...",       "python tools/download_media.py",   [],        "Media Download"),
-            (60,  "🗣️ Synthesizing voiceover...",  "python tools/generate_audio.py",   [voice_id], "Audio Generation"),
-            (85,  "🎬 Rendering final video...",    "python tools/compose_video.py",    [],        "Video Composition"),
-        ]
+        start_time = time.time()
 
         try:
-            for pct, label, cmd, args, name in steps:
-                progress.progress(pct, text=label)
-                status.info(label)
-                run_pipeline_step(cmd, args, name)
+            # ── Step 1: Script Generation ────────────────────────────────────
+            progress.progress(5, text="📝 Generating script...")
+            status.info("📝 Generating script with Groq (Llama 3.1)...")
+
+            from tools.generate_script import generate_script
+            script_data = generate_script(topic)
+
+            seg_count = len(script_data["segments"])
+            est_dur = script_data["total_duration_estimate"]
+            status.success(f"✅ Script: {seg_count} segments, ~{est_dur:.0f}s estimated")
+
+            # ── Step 2: Keyword Extraction ───────────────────────────────────
+            progress.progress(15, text="🔍 Extracting keywords...")
+            status.info("🔍 Extracting visual keywords...")
+
+            from tools.extract_keywords import extract_keywords_from_segments
+            keywords_data = extract_keywords_from_segments(script_data)
+
+            kw_count = len(keywords_data["all_keywords"])
+            status.success(f"✅ Keywords: {kw_count} unique visual keywords extracted")
+
+            # ── Step 3: Audio Generation ─────────────────────────────────────
+            progress.progress(25, text="🗣️ Synthesizing voiceover...")
+            status.info(f"🗣️ Generating voiceover ({VOICES[voice_id][0]})...")
+
+            from tools.generate_audio import generate_audio
+            audio_data = generate_audio(script_data, voice=voice_id)
+
+            audio_dur = audio_data["duration"]
+            status.success(f"✅ Audio: {audio_dur:.1f}s voiceover generated")
+
+            # ── Step 4: Media Download ───────────────────────────────────────
+            progress.progress(40, text="⬇️ Downloading media...")
+            status.info("⬇️ Downloading stock footage from Pexels...")
+
+            from tools.download_media import download_media
+            media_data = download_media(keywords_data, audio_duration=audio_data["duration"])
+
+            sourced = sum(1 for a in media_data["media_assets"] if a["source"] != "none")
+            total = len(media_data["media_assets"])
+            status.success(f"✅ Media: {sourced}/{total} segments sourced")
+
+            # ── Step 5: Video Composition ────────────────────────────────────
+            progress.progress(65, text="🎬 Rendering final video...")
+            status.info("🎬 Rendering video — this may take 1-2 minutes...")
+
+            from tools.compose_video import compose_video
+            video_data = compose_video(
+                audio_metadata=audio_data,
+                media_assets=media_data["media_assets"],
+            )
+
+            # ── Done! ────────────────────────────────────────────────────────
+            elapsed = time.time() - start_time
+            mins = int(elapsed // 60)
+            secs = int(elapsed % 60)
 
             progress.progress(100, text="✅ Complete!")
-            status.success("🎉 Video generated successfully!")
+            status.success(
+                f"🎉 Video generated in {mins}m {secs}s! "
+                f"({video_data['file_size_mb']:.1f} MB, {video_data['duration']:.1f}s)"
+            )
 
-            # Find latest video
-            out = "output"
-            if os.path.exists(out):
-                mp4s = [f for f in os.listdir(out)
-                        if f.endswith(".mp4") and not f.startswith("raw_")]
-                if mp4s:
-                    latest = max(
-                        [os.path.join(out, f) for f in mp4s],
-                        key=os.path.getctime
+            # Show video
+            video_path = video_data["video_path"]
+            if os.path.exists(video_path):
+                st.video(video_path)
+                with open(video_path, "rb") as vf:
+                    st.download_button(
+                        "💾 Download Video",
+                        data=vf,
+                        file_name=os.path.basename(video_path),
+                        mime="video/mp4"
                     )
-                    st.video(latest)
-                    with open(latest, "rb") as vf:
-                        st.download_button(
-                            "💾 Download Video",
-                            data=vf,
-                            file_name=os.path.basename(latest),
-                            mime="video/mp4"
-                        )
 
         except Exception as e:
             progress.empty()
-            st.error(f"❌ {e}")
+            elapsed = time.time() - start_time
+            st.error(f"❌ Pipeline failed after {elapsed:.0f}s: {e}")
+            # Show traceback in expander for debugging
+            import traceback
+            with st.expander("🔍 Error Details"):
+                st.code(traceback.format_exc())
 
 with col2:
     st.markdown("#### 📂 Recent Videos")
@@ -202,4 +208,4 @@ with col2:
         st.caption("No videos yet.")
 
 st.markdown("---")
-st.caption("Powered by Gemini · Pexels · Edge-TTS · MoviePy")
+st.caption("Powered by Groq (Llama 3.1) · Pexels · Edge-TTS · MoviePy")

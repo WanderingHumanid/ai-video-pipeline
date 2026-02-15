@@ -1,6 +1,6 @@
 """
 Script Generation Tool
-Generates high-retention video scripts using Gemini API.
+Generates high-retention video scripts using Groq API (Llama 3.1 8B).
 """
 
 import json
@@ -9,7 +9,7 @@ import sys
 import re
 import time
 import datetime
-import google.generativeai as genai
+from groq import Groq
 from dotenv import load_dotenv
 
 # Fix Windows console encoding
@@ -35,7 +35,7 @@ For each segment, provide:
 - 2-3 visual keywords (concrete nouns: objects, places, things) for sourcing stock footage
 - A specific visual search query for stock footage websites (3-4 words)
 
-OUTPUT FORMAT (strict JSON, no markdown):
+OUTPUT FORMAT (strict JSON, no markdown, no code fences):
 {{
   "full_script": "complete script text here",
   "segments": [
@@ -48,21 +48,22 @@ OUTPUT FORMAT (strict JSON, no markdown):
   ]
 }}
 
+IMPORTANT: Return ONLY the raw JSON object. No markdown, no ```json fences, no extra text.
+
 Generate the script now for: "{topic}"
 """
 
 
 def generate_script(topic):
-    """Generate a video script for the given topic using Gemini API."""
+    """Generate a video script for the given topic using Groq API."""
     if not topic or topic.strip() == "":
         raise ValueError("Topic cannot be empty")
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key or api_key == "your_gemini_api_key_here":
-        raise ValueError("GEMINI_API_KEY not configured in .env")
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key or api_key == "your_groq_api_key_here":
+        raise ValueError("GROQ_API_KEY not configured in .env")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = Groq(api_key=api_key)
 
     prompt = PROMPT_TEMPLATE.format(topic=topic)
 
@@ -73,25 +74,40 @@ def generate_script(topic):
     for attempt in range(max_retries):
         try:
             temperature = 0.7 if attempt == 0 else 0.5
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=temperature,
-                    max_output_tokens=4000,
-                    response_mime_type="application/json",
-                ),
+
+            # Respect Groq free-tier rate limits: add a small delay between retries
+            if attempt > 0:
+                wait_time = 5 * attempt
+                print(f"⏳ Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a JSON-only response bot. You MUST respond with valid JSON only. No markdown, no code fences, no explanations."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                model="llama-3.1-8b-instant",
+                temperature=temperature,
+                max_tokens=4000,
+                response_format={"type": "json_object"},
             )
 
-            raw_text = response.text.strip()
+            raw_text = chat_completion.choices[0].message.content.strip()
 
             # Extract JSON from potential markdown or text
             start_idx = raw_text.find('{')
             end_idx = raw_text.rfind('}')
-            
+
             if start_idx != -1 and end_idx != -1:
                 raw_text = raw_text[start_idx:end_idx+1]
             else:
-                # Fallback to stripping fences if braces not found (unlikely for valid JSON)
+                # Fallback to stripping fences if braces not found
                 raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                 raw_text = re.sub(r"\s*```$", "", raw_text)
 
@@ -142,8 +158,8 @@ def generate_script(topic):
             last_error = f"Error (attempt {attempt + 1}): {e}"
             print(f"⚠️  {last_error}")
             error_str = str(e).lower()
-            if "quota" in error_str or "429" in error_str or "resource" in error_str:
-                wait_time = 10 * (attempt + 1)  # 10s, 20s, 30s max
+            if "rate_limit" in error_str or "429" in error_str or "quota" in error_str:
+                wait_time = 15 * (attempt + 1)  # 15s, 30s, 45s
                 print(f"⚠️  Rate limit hit. Waiting {wait_time}s...")
                 time.sleep(wait_time)
             else:

@@ -66,24 +66,13 @@ def generate_audio(script_data, voice="en-US-AriaNeural", rate="+0%"):
         else:
             raise RuntimeError(f"Failed to generate audio for segment {i}")
 
-    # Combine all segments into full audio (optional, but good for preview)
-    from pydub import AudioSegment
-    full_audio = AudioSegment.empty()
-    for seg in audio_segments:
-        try:
-            seg_audio = AudioSegment.from_mp3(seg["file_path"])
-            full_audio += seg_audio
-            # Add a small silence between segments if needed? 
-            # For now, keeping it tight to match video concatenation
-        except Exception as e:
-            print(f"⚠️  Error merging segment {seg['index']}: {e}")
-
-    full_audio.export(full_output_path, format="mp3")
-    total_duration = len(full_audio) / 1000.0
+    # Calculate total duration from segments (no need to merge into single file
+    # since compose_video uses individual segment files)
+    total_duration = sum(seg["duration"] for seg in audio_segments)
 
     output = {
         "script": full_script,
-        "local_path": full_output_path,
+        "local_path": "",  # Individual segment files are used directly
         "duration": round(total_duration, 2),
         "segments": audio_segments,
         "voice": voice,

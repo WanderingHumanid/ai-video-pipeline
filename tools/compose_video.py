@@ -2,6 +2,12 @@
 Video Composition Tool
 Renders final .mp4 video by syncing media clips with audio narration.
 Uses MoviePy and FFmpeg. Subtitles burned via FFmpeg drawtext filter.
+
+Optimized for speed:
+  - 854x480 default resolution (fast render, good for YouTube)
+  - 20fps (fewer frames, negligible quality difference)
+  - ultrafast preset with sensible bitrate
+  - Simplified resize (no CompositeVideoClip overhead)
 """
 
 import json
@@ -9,7 +15,7 @@ import os
 import sys
 import datetime
 import subprocess
-import tempfile
+import shutil
 
 # Fix Windows console encoding
 sys.stdout.reconfigure(encoding='utf-8')
@@ -17,16 +23,16 @@ sys.stderr.reconfigure(encoding='utf-8')
 
 
 def compose_video(audio_metadata, media_assets, output_dir="output",
-                   fps=24, bitrate="2000k", resolution=(1280, 720)):
+                   fps=20, bitrate="1500k", resolution=(854, 480)):
     """
     Compose final video from media clips and audio narration segments.
-    Subtitles are burned in via FFmpeg drawtext after initial render.
+    Subtitles are burned in via FFmpeg after initial render.
 
     Args:
         audio_metadata: Dict with 'segments' key (from generate_audio output)
         media_assets: List of media asset dicts (from download_media output)
         output_dir: Directory for final video output
-        fps: Frames per second (24 is cinematic & fast)
+        fps: Frames per second (20 = fast render, smooth playback)
         bitrate: Video bitrate
         resolution: Output resolution tuple (width, height)
 
@@ -35,7 +41,7 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
     """
     from moviepy import (
         VideoFileClip, ImageClip, AudioFileClip,
-        concatenate_videoclips, ColorClip, CompositeVideoClip
+        concatenate_videoclips, ColorClip
     )
 
     target_w, target_h = resolution
@@ -64,10 +70,9 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
             media_path = asset["local_path"]
             try:
                 if asset["type"] == "video":
-                    clip = _process_video_clip(media_path, duration)
+                    clip = _process_video_clip(media_path, duration, target_w, target_h, fps)
                 else:
-                    clip = _process_image_clip(media_path, duration)
-                clip = _resize_clip(clip, target_w, target_h)
+                    clip = _process_image_clip(media_path, duration, target_w, target_h, fps)
             except Exception as e:
                 print(f"⚠️ visual fail ({e})", end=" ")
                 clip = None
@@ -89,7 +94,7 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
     print("   Concatenating clips...")
     final_video = concatenate_videoclips(video_clips, method="compose")
 
-    # 4. Export raw video (NO subtitles yet — fast render)
+    # 4. Export raw video (NO subtitles yet)
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     raw_path = os.path.join(output_dir, f"raw_{timestamp}.mp4")
@@ -105,16 +110,19 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         fps=fps,
         bitrate=bitrate,
         preset="ultrafast",
-        threads=8,
+        threads=os.cpu_count() or 4,
         logger="bar",
     )
 
-    # Cleanup MoviePy clips immediately
+    # Cleanup MoviePy clips immediately to free memory
     final_video.close()
     for c in video_clips:
-        c.close()
+        try:
+            c.close()
+        except:
+            pass
 
-    # 5. Burn subtitles with FFmpeg drawtext (near-instant)
+    # 5. Burn subtitles with FFmpeg (fast re-encode)
     print("   Burning subtitles with FFmpeg...")
     _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments)
 
@@ -138,6 +146,7 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         "created_at": datetime.datetime.now().isoformat(),
     }
 
+    os.makedirs(".tmp", exist_ok=True)
     with open(".tmp/output_metadata.json", "w", encoding="utf-8") as f:
         json.dump(output_meta, f, indent=2)
 
@@ -146,54 +155,49 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
 
 
 def _burn_subtitles_ffmpeg(input_path, output_path, audio_segments):
-    """Burn subtitles using FFmpeg drawtext filter - extremely fast."""
-    
-    # Build SRT file for subtitles
+    """Burn subtitles using FFmpeg subtitles filter — fast."""
+
+    # Build SRT file
     srt_path = os.path.abspath(".tmp/subtitles.srt")
     _generate_srt(audio_segments, srt_path)
-    
+
     # On Windows, FFmpeg subtitles filter needs forward slashes and escaped colons
     srt_ffmpeg = srt_path.replace("\\", "/")
-    # Escape the colon in drive letter (C: -> C\:)
     if len(srt_ffmpeg) >= 2 and srt_ffmpeg[1] == ':':
         srt_ffmpeg = srt_ffmpeg[0] + "\\:" + srt_ffmpeg[2:]
-    
+
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
-        "-vf", f"subtitles='{srt_ffmpeg}':force_style='FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2,Shadow=1,Alignment=2,MarginV=30,FontName=Arial'",
+        "-vf", f"subtitles='{srt_ffmpeg}':force_style='FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2,Shadow=1,Alignment=2,MarginV=25,FontName=Arial'",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-c:a", "copy",
-        "-threads", "8",
+        "-threads", str(os.cpu_count() or 4),
         output_path
     ]
-    
-    print(f"   Running FFmpeg subtitle burn...")
+
     result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
-    
+
     if result.returncode != 0:
-        print(f"   ⚠️ FFmpeg subtitles failed: {result.stderr[-200:] if result.stderr else 'unknown'}")
-        print(f"   ⚠️ Trying alternate approach...")
-        # Fallback: copy without subtitles rather than crash
-        import shutil
+        print(f"   ⚠️ FFmpeg subtitles failed: {result.stderr[-300:] if result.stderr else 'unknown'}")
+        print(f"   ⚠️ Saving video without subtitles...")
         shutil.copy2(input_path, output_path)
-        print(f"   ⚠️ Video saved without subtitles")
 
 
 def _generate_srt(audio_segments, srt_path):
     """Generate SRT subtitle file from audio segment timing."""
     current_time = 0.0
-    
+
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, seg in enumerate(audio_segments):
             start = current_time
             end = current_time + seg["duration"]
-            
+
             f.write(f"{i + 1}\n")
             f.write(f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n")
             f.write(f"{seg['text']}\n\n")
-            
+
             current_time = end
 
 
@@ -206,11 +210,11 @@ def _format_srt_time(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def _process_video_clip(path, required_duration):
-    """Load and adjust video clip to required duration."""
+def _process_video_clip(path, required_duration, target_w, target_h, fps):
+    """Load, resize, and adjust video clip to required duration."""
     from moviepy import VideoFileClip, concatenate_videoclips
 
-    clip = VideoFileClip(path)
+    clip = VideoFileClip(path, target_resolution=(target_h, target_w))
 
     if clip.duration >= required_duration:
         clip = clip.subclipped(0, required_duration)
@@ -219,39 +223,27 @@ def _process_video_clip(path, required_duration):
         clip = concatenate_videoclips([clip] * num_loops)
         clip = clip.subclipped(0, required_duration)
 
-    return clip
+    # Ensure exact target size
+    try:
+        clip = clip.resized((target_w, target_h))
+    except AttributeError:
+        clip = clip.resize((target_w, target_h))
+
+    return clip.with_fps(fps)
 
 
-def _process_image_clip(path, required_duration):
-    """Create video clip from image."""
+def _process_image_clip(path, required_duration, target_w, target_h, fps):
+    """Create video clip from image, resized to target."""
     from moviepy import ImageClip
+
     clip = ImageClip(path, duration=required_duration)
-    return clip
-
-
-def _resize_clip(clip, target_w, target_h):
-    """Resize clip to target resolution, maintaining aspect ratio with black bars."""
-    from moviepy import CompositeVideoClip, ColorClip
-
-    w, h = clip.size
-    scale = min(target_w / w, target_h / h)
-    new_w = int(w * scale)
-    new_h = int(h * scale)
 
     try:
-        clip = clip.resized((new_w, new_h))
+        clip = clip.resized((target_w, target_h))
     except AttributeError:
-        clip = clip.resize((new_w, new_h))
+        clip = clip.resize((target_w, target_h))
 
-    bg = ColorClip(size=(target_w, target_h), color=(0, 0, 0), duration=clip.duration)
-    bg = bg.with_fps(clip.fps if clip.fps else 24)
-
-    final = CompositeVideoClip(
-        [bg, clip.with_position("center")],
-        size=(target_w, target_h)
-    )
-    final = final.with_duration(clip.duration)
-    return final
+    return clip.with_fps(fps)
 
 
 if __name__ == "__main__":
