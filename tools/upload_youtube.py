@@ -1,4 +1,4 @@
-"""Uploads video to YouTube using OAuth2 credentials from .env or client_secrets.json."""
+"""Uploads video to YouTube using OAuth2 credentials."""
 
 import json
 import os
@@ -13,7 +13,7 @@ sys.stderr.reconfigure(encoding='utf-8')
 load_dotenv()
 
 
-def authenticate():
+def authenticate(secrets_path=None):
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -21,9 +21,14 @@ def authenticate():
 
     SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
     creds = None
+    
+    # Use a separate token file for custom secrets to avoid overwriting default
+    if secrets_path:
+        token_path = ".tmp/youtube_token_custom.pickle"
+    else:
+        token_path = ".tmp/youtube_token.pickle"
 
     os.makedirs(".tmp", exist_ok=True)
-    token_path = ".tmp/youtube_token.pickle"
 
     # 1. Try loading pickled credentials
     if os.path.exists(token_path):
@@ -39,35 +44,41 @@ def authenticate():
                 creds = None
 
         if not creds:
-            # 3. Try .env credentials first
-            client_id = os.getenv("YOUTUBE_CLIENT_ID")
-            client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
-            refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
-
-            if client_id and client_secret and refresh_token:
-                print("   🔑 Using YouTube credentials from .env")
-                creds = Credentials(
-                    None,  # access_token (will be refreshed)
-                    refresh_token=refresh_token,
-                    token_uri="https://oauth2.googleapis.com/token",
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    scopes=SCOPES
-                )
-                creds.refresh(Request()) # Refresh immediately to get access token
-            else:
-                # 4. Fallback to client_secrets.json (Browser Flow)
-                secrets_path = "client_secrets.json"
-                if not os.path.exists(secrets_path):
-                    raise FileNotFoundError(
-                        "YouTube credentials not found. "
-                        "Set YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN in .env "
-                        "OR place client_secrets.json in project root."
-                    )
-                
-                print("   🔑 Starting browser authentication...")
+            # 3. IF secrets_path provided, use it (Browser Flow)
+            if secrets_path:
+                print(f"   🔑 Authenticating with provided secrets: {secrets_path}")
                 flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
                 creds = flow.run_local_server(port=8080)
+            
+            # 4. ELSE try .env credentials
+            else:
+                client_id = os.getenv("YOUTUBE_CLIENT_ID")
+                client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
+                refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
+
+                if client_id and client_secret and refresh_token:
+                    print("   🔑 Using YouTube credentials from .env")
+                    creds = Credentials(
+                        None,  # access_token (will be refreshed)
+                        refresh_token=refresh_token,
+                        token_uri="https://oauth2.googleapis.com/token",
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        scopes=SCOPES
+                    )
+                    creds.refresh(Request())
+                else:
+                    # 5. Fallback to default client_secrets.json
+                    default_secrets = "client_secrets.json"
+                    if not os.path.exists(default_secrets):
+                        raise FileNotFoundError(
+                            "YouTube credentials not found. "
+                            "Upload client_secrets.json or configure .env."
+                        )
+                    
+                    print("   🔑 Starting browser authentication (default)...")
+                    flow = InstalledAppFlow.from_client_secrets_file(default_secrets, SCOPES)
+                    creds = flow.run_local_server(port=8080)
 
         # Save valid credentials
         with open(token_path, "wb") as token:
@@ -107,7 +118,7 @@ def generate_metadata(topic, media_assets=None):
     }
 
 
-def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
+def upload_video(video_path, topic, media_assets=None, privacy="unlisted", captions_path=None, secrets_path=None):
     from googleapiclient.http import MediaFileUpload
 
     if not os.path.exists(video_path):
@@ -116,7 +127,7 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
     print(f"🎥 Preparing upload: {video_path}")
 
     try:
-        youtube = authenticate()
+        youtube = authenticate(secrets_path)
     except Exception as e:
         return {
             "upload_status": "auth_failed",
@@ -150,7 +161,7 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
         media_body=media,
     )
 
-    print("   Uploading...")
+    print("   Uploading video...")
     response = None
     while response is None:
         try:
@@ -172,6 +183,29 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
 
     video_id = response["id"]
     youtube_url = f"https://youtube.com/watch?v={video_id}"
+    print(f"✅ Video uploaded: {youtube_url}")
+
+    # --- Upload Captions ---
+    if captions_path and os.path.exists(captions_path):
+        print(f"   Uploading captions: {captions_path}")
+        try:
+            caption_body = {
+                "snippet": {
+                    "videoId": video_id,
+                    "language": "en",
+                    "name": "English (Auto-generated)",
+                    "isDraft": False
+                }
+            }
+            caption_media = MediaFileUpload(captions_path, mimetype="application/x-subrip")
+            youtube.captions().insert(
+                part="snippet",
+                body=caption_body,
+                media_body=caption_media
+            ).execute()
+            print("   ✅ Captions uploaded")
+        except Exception as e:
+            print(f"   ⚠️ Caption upload failed: {e}")
 
     result = {
         "youtube_url": youtube_url,
@@ -184,7 +218,6 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
     with open(".tmp/youtube_upload.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
-    print(f"\n✅ Video uploaded: {youtube_url}")
     return result
 
 

@@ -55,13 +55,30 @@ DURATION_OPTIONS = {
     "2min — In-depth":      120,
 }
 
+# --- Sidebar ---
 with st.sidebar:
     st.header("⚙️ Configuration")
 
     pexels_api = os.getenv("PEXELS_API_KEY")
     groq_api = os.getenv("GROQ_API_KEY")
-    youtube_client_id = os.getenv("YOUTUBE_CLIENT_ID")
+    
+    # User-uploaded secrets for custom channel upload
+    st.subheader("YouTube Upload")
+    uploaded_secrets = st.file_uploader(
+        "Upload client_secrets.json", 
+        type="json", 
+        help="To upload to YOUR channel, upload your OAuth web client secrets here. Otherwise, uploads are disabled or use default env keys."
+    )
+    
+    user_secrets_path = None
+    if uploaded_secrets is not None:
+        os.makedirs(".tmp", exist_ok=True)
+        user_secrets_path = os.path.abspath(".tmp/user_client_secrets.json")
+        with open(user_secrets_path, "wb") as f:
+            f.write(uploaded_secrets.getbuffer())
+        st.success("✅ Custom credentials loaded")
 
+    # API Status Checks
     if pexels_api:
         st.success("✅ Pexels API Key")
     else:
@@ -72,14 +89,21 @@ with st.sidebar:
     else:
         st.error("❌ Groq API Key missing")
         
-    if youtube_client_id or os.path.exists("client_secrets.json"):
-        st.success("✅ YouTube API Ready")
+    # Check if we have ANY valid YouTube auth method
+    has_youtube_env = bool(os.getenv("YOUTUBE_CLIENT_ID"))
+    has_default_secrets = os.path.exists("client_secrets.json")
+    can_upload = bool(user_secrets_path or has_youtube_env or has_default_secrets)
+    
+    if can_upload:
+        st.success(f"✅ YouTube Upload Ready ({'Custom' if user_secrets_path else 'Env/Default'})")
     else:
-        st.warning("⚠️ YouTube API not configured (Upload disabled)")
+        st.warning("⚠️ YouTube Upload disabled")
 
     st.markdown("---")
-    st.caption("💡 Ensure `.env` is configured before running.")
+    st.caption("💡 Ensure `.env` is configurable if not using custom secrets.")
 
+
+# --- Main Content ---
 st.title("🎬 AI Video Generator")
 st.markdown("---")
 
@@ -124,11 +148,13 @@ with st.expander("⏱️ Video Duration"):
     target_duration = DURATION_OPTIONS[duration_label]
     st.caption(f"Selected: **{target_duration}s**")
 
-enable_subtitles = st.toggle("🔤 Enable Subtitles", value=True)
+enable_subtitles = st.toggle("🔤 Enable Subtitles (Burned in)", value=True)
 review_script = st.toggle("✏️ Review & edit script before generating", value=False)
 
 can_generate = bool(topic and pexels_api and groq_api)
 
+
+# --- Pipeline Logic ---
 
 def _run_pipeline_after_script(script_data):
     """Run the pipeline from keywords onward."""
@@ -186,22 +212,11 @@ def _run_pipeline_after_script(script_data):
             f"({video_data['file_size_mb']:.1f} MB, {video_data['duration']:.1f}s)"
         )
 
+        # Update Session State
         st.session_state["last_video_data"] = video_data
         st.session_state["last_audio_data"] = audio_data
-        
-        # Save media assets for thumbnail generation later
         st.session_state["last_media_assets"] = media_data["media_assets"]
-
-        video_path = video_data["video_path"]
-        if os.path.exists(video_path):
-            st.video(video_path)
-            with open(video_path, "rb") as vf:
-                st.download_button(
-                    "💾 Download Video",
-                    data=vf,
-                    file_name=os.path.basename(video_path),
-                    mime="video/mp4"
-                )
+        st.session_state["script_topic"] = topic
 
     except Exception as e:
         progress.empty()
@@ -222,7 +237,10 @@ if generate_btn:
     st.session_state["_progress"] = progress
     st.session_state["_status"] = status
     st.session_state["_start_time"] = start_time
-    st.session_state["script_topic"] = topic
+    # Clear previous results
+    for key in ["last_video_data", "last_audio_data", "last_media_assets", "last_thumbnail"]:
+        if key in st.session_state:
+            del st.session_state[key]
 
     progress.progress(5, text="📝 Generating script...")
     status.info("📝 Generating script...")
@@ -236,165 +254,140 @@ if generate_btn:
 
     if review_script:
         st.session_state["pending_script"] = script_data
+        st.session_state["script_topic"] = topic
         st.rerun()
     else:
         _run_pipeline_after_script(script_data)
 
 
+# --- Script Review UI ---
 if "pending_script" in st.session_state:
     script_data = st.session_state["pending_script"]
-
     st.markdown("---")
     st.subheader("✏️ Review & Edit Script")
-    st.caption("Edit the narration text below, then click **Continue** to proceed.")
-
+    
     edited_segments = []
     for i, seg in enumerate(script_data["segments"]):
         with st.expander(f"Segment {i + 1} — ~{seg.get('duration_estimate', '?')}s", expanded=True):
-            text = st.text_area(
-                f"Narration text (Segment {i + 1})",
-                value=seg["text"],
-                height=80,
-                key=f"seg_text_{i}",
-                label_visibility="collapsed",
-            )
+            text = st.text_area(f"Narration {i+1}", value=seg["text"], height=80, key=f"seg_txt_{i}")
             col1, col2 = st.columns(2)
             with col1:
-                vsq = st.text_input(
-                    "Visual search query",
-                    value=seg.get("visual_search_query", ""),
-                    key=f"seg_vsq_{i}",
-                )
+                vsq = st.text_input("Visual Query", value=seg.get("visual_search_query", ""), key=f"seg_vsq_{i}")
             with col2:
-                kws = st.text_input(
-                    "Keywords (comma-separated)",
-                    value=", ".join(seg.get("keywords", [])),
-                    key=f"seg_kws_{i}",
-                )
-
+                kws = st.text_input("Keywords", value=", ".join(seg.get("keywords", [])), key=f"seg_kws_{i}")
+            
             edited_segments.append({
-                **seg,
-                "text": text,
-                "visual_search_query": vsq,
-                "keywords": [k.strip() for k in kws.split(",") if k.strip()],
+                **seg, "text": text, "visual_search_query": vsq, 
+                "keywords": [k.strip() for k in kws.split(",") if k.strip()]
             })
 
-    col_continue, col_cancel = st.columns([1, 1])
-
-    with col_continue:
-        if st.button("✅ Continue with this script", type="primary"):
-            script_data["segments"] = edited_segments
-            script_data["full_script"] = " ".join(s["text"] for s in edited_segments)
-
-            os.makedirs(".tmp", exist_ok=True)
-            with open(".tmp/script.json", "w", encoding="utf-8") as f:
-                json.dump(script_data, f, indent=2, ensure_ascii=False)
-
-            del st.session_state["pending_script"]
-
-            progress = st.progress(10, text="Continuing pipeline...")
-            status = st.empty()
-            st.session_state["_progress"] = progress
-            st.session_state["_status"] = status
-            st.session_state["_start_time"] = time.time()
-
-            _run_pipeline_after_script(script_data)
-
-    with col_cancel:
-        if st.button("❌ Cancel"):
-            del st.session_state["pending_script"]
-            st.rerun()
+    c1, c2 = st.columns([1, 1])
+    if c1.button("✅ Continue"):
+        script_data["segments"] = edited_segments
+        script_data["full_script"] = " ".join(s["text"] for s in edited_segments)
+        del st.session_state["pending_script"]
+        
+        # Setup UI for continuation
+        progress = st.progress(10, text="Continuing...")
+        status = st.empty()
+        st.session_state["_progress"] = progress
+        st.session_state["_status"] = status
+        
+        _run_pipeline_after_script(script_data)
+        st.rerun()
+        
+    if c2.button("❌ Cancel"):
+        del st.session_state["pending_script"]
+        st.rerun()
 
 
-# --- Post-Generation Tools (Re-render, Thumbnail, Upload) ---
-
+# --- Persistent Result Display (The Fix for Disappearing Video) ---
 if "last_video_data" in st.session_state:
+    vd = st.session_state["last_video_data"]
+    video_path = vd["video_path"]
+    
     st.markdown("---")
-    st.subheader("🛠️ Extras")
+    st.subheader("🎉 Result")
     
-    col_thumb, col_upload = st.columns(2)
-    
-    # 1. Thumbnail Generator
-    with col_thumb:
-        st.markdown("#### 🖼️ Thumbnail")
-        if st.button("Generate Thumbnail"):
-            with st.spinner("Generating thumbnail..."):
-                from tools.generate_thumbnail import generate_thumbnail
-                topic_text = st.session_state.get("script_topic", "Video")
-                media_assets = st.session_state.get("last_media_assets", [])
-                
-                thumb_path = generate_thumbnail(topic_text, media_assets)
-                st.session_state["last_thumbnail"] = thumb_path
-                
-        if st.session_state.get("last_thumbnail") and os.path.exists(st.session_state["last_thumbnail"]):
-             st.image(st.session_state["last_thumbnail"], caption="YouTube Thumbnail")
-             with open(st.session_state["last_thumbnail"], "rb") as f:
-                 st.download_button("💾 Download Thumbnail", f, file_name="thumbnail.jpg", mime="image/jpeg")
-
-    # 2. YouTube Upload
-    with col_upload:
-        st.markdown("#### 📤 YouTube Upload")
-        privacy = st.selectbox("Privacy", ["unlisted", "private", "public"], index=0)
+    if os.path.exists(video_path):
+        st.video(video_path)
         
-        can_upload = bool(os.getenv("YOUTUBE_CLIENT_ID") or os.path.exists("client_secrets.json"))
-        
-        if st.button("Upload to YouTube", disabled=not can_upload):
-            video_path = st.session_state["last_video_data"]["video_path"]
-            topic_text = st.session_state.get("script_topic", "AI Video")
-            media_assets = st.session_state.get("last_media_assets", [])
+        # Download Button
+        with open(video_path, "rb") as vf:
+            st.download_button("💾 Download Video", data=vf, file_name=os.path.basename(video_path), mime="video/mp4")
             
-            with st.spinner("Uploading to YouTube..."):
-                from tools.upload_youtube import upload_video
-                result = upload_video(video_path, topic_text, media_assets, privacy=privacy)
-                
-                if result.get("youtube_url"):
-                    st.success(f"✅ Uploaded! [Watch Video]({result['youtube_url']})")
-                    st.balloons()
-                else:
-                    st.error(f"❌ Upload failed: {result.get('error', 'Unknown error')}")
+        # --- Extras Section ---
+        st.markdown("### 🛠️ Extras")
+        
+        tab1, tab2, tab3 = st.tabs(["🖼️ Thumbnail", "📤 YouTube Upload", "⚙️ Re-render"])
+        
+        # Tab 1: Thumbnail
+        with tab1:
+            if st.button("Generate Thumbnail"):
+                with st.spinner("Generating..."):
+                    from tools.generate_thumbnail import generate_thumbnail
+                    t_topic = st.session_state.get("script_topic", "Video")
+                    t_media = st.session_state.get("last_media_assets", [])
+                    thumb_path = generate_thumbnail(t_topic, t_media)
+                    st.session_state["last_thumbnail"] = thumb_path
+            
+            if st.session_state.get("last_thumbnail"):
+                st.image(st.session_state["last_thumbnail"])
+                with open(st.session_state["last_thumbnail"], "rb") as f:
+                    st.download_button("Download Thumbnail", f, file_name="thumbnail.jpg", mime="image/jpeg")
 
-    # 3. Re-render Options
-    st.markdown("---")
-    
-    with st.expander("⚙️ Advanced: Re-render Video"):
-        vd = st.session_state["last_video_data"]
-        raw_path = vd.get("raw_path")
-        has_subs = vd.get("subtitles_enabled", True)
+        # Tab 2: YouTube Upload
+        with tab2:
+            privacy = st.selectbox("Privacy", ["unlisted", "private", "public"])
+            
+            if st.button("Upload to YouTube", disabled=not can_upload):
+                with st.spinner("Uploading..."):
+                    from tools.upload_youtube import upload_video
+                    
+                    # Use custom secrets if uploaded, else None (triggering default/env logic)
+                    secrets_to_use = user_secrets_path if user_secrets_path else None
+                    
+                    # SRT path from video data
+                    srt_path = vd.get("srt_path")
+                    
+                    res = upload_video(
+                        video_path, 
+                        st.session_state.get("script_topic", "Video"), 
+                        st.session_state.get("last_media_assets"), 
+                        privacy=privacy, 
+                        captions_path=srt_path,
+                        secrets_path=secrets_to_use
+                    )
+                    
+                    if res.get("youtube_url"):
+                        st.success(f"✅ Uploaded! [Watch Video]({res['youtube_url']})")
+                    elif res.get("upload_status") == "auth_failed":
+                        st.error(f"❌ Auth Failed: {res.get('error')}")
+                    else:
+                        st.error(f"❌ Failed: {res.get('error', 'Unknown')}")
 
-        if raw_path and os.path.exists(raw_path):
-            if has_subs:
-                toggle_label = "🔇 Re-render **without** subtitles"
-            else:
-                toggle_label = "🔤 Re-render **with** subtitles"
-
-            if st.button(toggle_label):
-                with st.spinner("Re-rendering (~10s)..."):
+        # Tab 3: Re-render
+        with tab3:
+            has_subs = vd.get("subtitles_enabled", True)
+            btn_label = "re-render without subtitles" if has_subs else "re-render with subtitles"
+            
+            if st.button(f"Generate {btn_label}"):
+                with st.spinner("Processing..."):
+                    # Logic to swap subtitle state
                     import shutil
-                    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-                    new_output = os.path.join(os.path.dirname(raw_path), f"video_{timestamp}.mp4")
+                    new_ts = datetime.datetime.now().strftime("%H%M%S")
+                    new_out = video_path.replace(".mp4", f"_r{new_ts}.mp4")
                     
                     if has_subs:
-                        shutil.copy2(raw_path, new_output)
-                        new_subs = False
+                         shutil.copy2(vd["raw_path"], new_out)
+                         new_subs_state = False
                     else:
-                        from tools.compose_video import burn_subtitles_only
-                        burn_subtitles_only(raw_path, new_output, st.session_state["last_audio_data"])
-                        new_subs = True
-
-                    st.session_state["last_video_data"]["video_path"] = new_output
-                    st.session_state["last_video_data"]["subtitles_enabled"] = new_subs
-                    st.session_state["last_video_data"]["file_size_mb"] = round(
-                        os.path.getsize(new_output) / (1024 * 1024), 2
-                    )
-
-                st.success(f"✅ Re-rendered {'with' if new_subs else 'without'} subtitles!")
-                st.video(new_output)
-                with open(new_output, "rb") as vf:
-                    st.download_button(
-                        "💾 Download Video",
-                        data=vf,
-                        file_name=os.path.basename(new_output),
-                        mime="video/mp4"
-                    )
+                         from tools.compose_video import burn_subtitles_only
+                         burn_subtitles_only(vd["raw_path"], new_out, st.session_state["last_audio_data"])
+                         new_subs_state = True
+                    
+                    st.session_state["last_video_data"]["video_path"] = new_out
+                    st.session_state["last_video_data"]["subtitles_enabled"] = new_subs_state
+                    st.rerun()
 
 st.markdown("---")

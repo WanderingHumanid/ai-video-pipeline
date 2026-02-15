@@ -129,6 +129,7 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
     output_meta = {
         "video_path": output_path,
         "raw_path": raw_path,
+        "srt_path": os.path.abspath(".tmp/subtitles.srt") if subtitles else None,
         "file_size_mb": round(file_size_mb, 2),
         "duration": round(total_duration, 2),
         "resolution": f"{target_w}x{target_h}",
