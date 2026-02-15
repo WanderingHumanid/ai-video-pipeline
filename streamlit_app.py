@@ -60,6 +60,7 @@ with st.sidebar:
 
     pexels_api = os.getenv("PEXELS_API_KEY")
     groq_api = os.getenv("GROQ_API_KEY")
+    youtube_client_id = os.getenv("YOUTUBE_CLIENT_ID")
 
     if pexels_api:
         st.success("✅ Pexels API Key")
@@ -70,6 +71,11 @@ with st.sidebar:
         st.success("✅ Groq API Key")
     else:
         st.error("❌ Groq API Key missing")
+        
+    if youtube_client_id or os.path.exists("client_secrets.json"):
+        st.success("✅ YouTube API Ready")
+    else:
+        st.warning("⚠️ YouTube API not configured (Upload disabled)")
 
     st.markdown("---")
     st.caption("💡 Ensure `.env` is configured before running.")
@@ -182,6 +188,9 @@ def _run_pipeline_after_script(script_data):
 
         st.session_state["last_video_data"] = video_data
         st.session_state["last_audio_data"] = audio_data
+        
+        # Save media assets for thumbnail generation later
+        st.session_state["last_media_assets"] = media_data["media_assets"]
 
         video_path = video_data["video_path"]
         if os.path.exists(video_path):
@@ -213,6 +222,7 @@ if generate_btn:
     st.session_state["_progress"] = progress
     st.session_state["_status"] = status
     st.session_state["_start_time"] = start_time
+    st.session_state["script_topic"] = topic
 
     progress.progress(5, text="📝 Generating script...")
     status.info("📝 Generating script...")
@@ -226,7 +236,6 @@ if generate_btn:
 
     if review_script:
         st.session_state["pending_script"] = script_data
-        st.session_state["script_topic"] = topic
         st.rerun()
     else:
         _run_pipeline_after_script(script_data)
@@ -297,48 +306,95 @@ if "pending_script" in st.session_state:
             st.rerun()
 
 
-if "last_video_data" in st.session_state and "last_audio_data" in st.session_state:
-    vd = st.session_state["last_video_data"]
-    raw_path = vd.get("raw_path")
-    has_subs = vd.get("subtitles_enabled", True)
+# --- Post-Generation Tools (Re-render, Thumbnail, Upload) ---
 
-    if raw_path and os.path.exists(raw_path):
-        st.markdown("---")
-        st.markdown("#### 🔄 Re-render Subtitles")
+if "last_video_data" in st.session_state:
+    st.markdown("---")
+    st.subheader("🛠️ Extras")
+    
+    col_thumb, col_upload = st.columns(2)
+    
+    # 1. Thumbnail Generator
+    with col_thumb:
+        st.markdown("#### 🖼️ Thumbnail")
+        if st.button("Generate Thumbnail"):
+            with st.spinner("Generating thumbnail..."):
+                from tools.generate_thumbnail import generate_thumbnail
+                topic_text = st.session_state.get("script_topic", "Video")
+                media_assets = st.session_state.get("last_media_assets", [])
+                
+                thumb_path = generate_thumbnail(topic_text, media_assets)
+                st.session_state["last_thumbnail"] = thumb_path
+                
+        if st.session_state.get("last_thumbnail") and os.path.exists(st.session_state["last_thumbnail"]):
+             st.image(st.session_state["last_thumbnail"], caption="YouTube Thumbnail")
+             with open(st.session_state["last_thumbnail"], "rb") as f:
+                 st.download_button("💾 Download Thumbnail", f, file_name="thumbnail.jpg", mime="image/jpeg")
 
-        if has_subs:
-            toggle_label = "🔇 Re-render **without** subtitles"
-        else:
-            toggle_label = "🔤 Re-render **with** subtitles"
-
-        if st.button(toggle_label):
-            with st.spinner("Re-rendering (~10s)..."):
-                import shutil
-                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-                new_output = os.path.join(os.path.dirname(raw_path), f"video_{timestamp}.mp4")
-
-                if has_subs:
-                    shutil.copy2(raw_path, new_output)
-                    new_subs = False
+    # 2. YouTube Upload
+    with col_upload:
+        st.markdown("#### 📤 YouTube Upload")
+        privacy = st.selectbox("Privacy", ["unlisted", "private", "public"], index=0)
+        
+        can_upload = bool(os.getenv("YOUTUBE_CLIENT_ID") or os.path.exists("client_secrets.json"))
+        
+        if st.button("Upload to YouTube", disabled=not can_upload):
+            video_path = st.session_state["last_video_data"]["video_path"]
+            topic_text = st.session_state.get("script_topic", "AI Video")
+            media_assets = st.session_state.get("last_media_assets", [])
+            
+            with st.spinner("Uploading to YouTube..."):
+                from tools.upload_youtube import upload_video
+                result = upload_video(video_path, topic_text, media_assets, privacy=privacy)
+                
+                if result.get("youtube_url"):
+                    st.success(f"✅ Uploaded! [Watch Video]({result['youtube_url']})")
+                    st.balloons()
                 else:
-                    from tools.compose_video import burn_subtitles_only
-                    burn_subtitles_only(raw_path, new_output, st.session_state["last_audio_data"])
-                    new_subs = True
+                    st.error(f"❌ Upload failed: {result.get('error', 'Unknown error')}")
 
-                st.session_state["last_video_data"]["video_path"] = new_output
-                st.session_state["last_video_data"]["subtitles_enabled"] = new_subs
-                st.session_state["last_video_data"]["file_size_mb"] = round(
-                    os.path.getsize(new_output) / (1024 * 1024), 2
-                )
+    # 3. Re-render Options
+    st.markdown("---")
+    
+    with st.expander("⚙️ Advanced: Re-render Video"):
+        vd = st.session_state["last_video_data"]
+        raw_path = vd.get("raw_path")
+        has_subs = vd.get("subtitles_enabled", True)
 
-            st.success(f"✅ Re-rendered {'with' if new_subs else 'without'} subtitles!")
-            st.video(new_output)
-            with open(new_output, "rb") as vf:
-                st.download_button(
-                    "💾 Download Re-rendered Video",
-                    data=vf,
-                    file_name=os.path.basename(new_output),
-                    mime="video/mp4"
-                )
+        if raw_path and os.path.exists(raw_path):
+            if has_subs:
+                toggle_label = "🔇 Re-render **without** subtitles"
+            else:
+                toggle_label = "🔤 Re-render **with** subtitles"
+
+            if st.button(toggle_label):
+                with st.spinner("Re-rendering (~10s)..."):
+                    import shutil
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                    new_output = os.path.join(os.path.dirname(raw_path), f"video_{timestamp}.mp4")
+                    
+                    if has_subs:
+                        shutil.copy2(raw_path, new_output)
+                        new_subs = False
+                    else:
+                        from tools.compose_video import burn_subtitles_only
+                        burn_subtitles_only(raw_path, new_output, st.session_state["last_audio_data"])
+                        new_subs = True
+
+                    st.session_state["last_video_data"]["video_path"] = new_output
+                    st.session_state["last_video_data"]["subtitles_enabled"] = new_subs
+                    st.session_state["last_video_data"]["file_size_mb"] = round(
+                        os.path.getsize(new_output) / (1024 * 1024), 2
+                    )
+
+                st.success(f"✅ Re-rendered {'with' if new_subs else 'without'} subtitles!")
+                st.video(new_output)
+                with open(new_output, "rb") as vf:
+                    st.download_button(
+                        "💾 Download Video",
+                        data=vf,
+                        file_name=os.path.basename(new_output),
+                        mime="video/mp4"
+                    )
 
 st.markdown("---")

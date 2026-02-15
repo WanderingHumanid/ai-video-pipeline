@@ -1,13 +1,16 @@
-"""Uploads rendered video to YouTube via Data API v3 with OAuth2."""
+"""Uploads video to YouTube using OAuth2 credentials from .env or client_secrets.json."""
 
 import json
 import os
 import sys
 import datetime
 import pickle
+from dotenv import load_dotenv
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
+
+load_dotenv()
 
 
 def authenticate():
@@ -22,10 +25,12 @@ def authenticate():
     os.makedirs(".tmp", exist_ok=True)
     token_path = ".tmp/youtube_token.pickle"
 
+    # 1. Try loading pickled credentials
     if os.path.exists(token_path):
         with open(token_path, "rb") as token:
             creds = pickle.load(token)
 
+    # 2. Refresh or create new credentials
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
@@ -34,22 +39,41 @@ def authenticate():
                 creds = None
 
         if not creds:
-            secrets_path = "client_secrets.json"
-            if not os.path.exists(secrets_path):
-                raise FileNotFoundError(
-                    "client_secrets.json not found. "
-                    "Download OAuth2 credentials from Google Cloud Console "
-                    "and save as client_secrets.json in the project root."
+            # 3. Try .env credentials first
+            client_id = os.getenv("YOUTUBE_CLIENT_ID")
+            client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
+            refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
+
+            if client_id and client_secret and refresh_token:
+                print("   🔑 Using YouTube credentials from .env")
+                creds = Credentials(
+                    None,  # access_token (will be refreshed)
+                    refresh_token=refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    scopes=SCOPES
                 )
+                creds.refresh(Request()) # Refresh immediately to get access token
+            else:
+                # 4. Fallback to client_secrets.json (Browser Flow)
+                secrets_path = "client_secrets.json"
+                if not os.path.exists(secrets_path):
+                    raise FileNotFoundError(
+                        "YouTube credentials not found. "
+                        "Set YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN in .env "
+                        "OR place client_secrets.json in project root."
+                    )
+                
+                print("   🔑 Starting browser authentication...")
+                flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
+                creds = flow.run_local_server(port=8080)
 
-            flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
-            creds = flow.run_local_server(port=8080)
-
+        # Save valid credentials
         with open(token_path, "wb") as token:
             pickle.dump(creds, token)
 
-    youtube = build("youtube", "v3", credentials=creds)
-    return youtube
+    return build("youtube", "v3", credentials=creds)
 
 
 def generate_metadata(topic, media_assets=None):
@@ -78,7 +102,7 @@ def generate_metadata(topic, media_assets=None):
         "title": title,
         "description": description[:5000],
         "tags": tags,
-        "category_id": "28",
+        "category_id": "28",  # Science & Technology
         "privacy_status": "unlisted",
     }
 
@@ -91,7 +115,13 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
 
     print(f"🎥 Preparing upload: {video_path}")
 
-    youtube = authenticate()
+    try:
+        youtube = authenticate()
+    except Exception as e:
+        return {
+            "upload_status": "auth_failed",
+            "error": str(e)
+        }
 
     metadata = generate_metadata(topic, media_assets)
     metadata["privacy_status"] = privacy
@@ -130,7 +160,7 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted"):
         except Exception as e:
             error_str = str(e)
             if "quotaExceeded" in error_str:
-                print("❌ YouTube quota exceeded. Video saved locally. Try again tomorrow.")
+                print("❌ YouTube quota exceeded. Video saved locally.")
                 return {
                     "youtube_url": "",
                     "youtube_video_id": "",
