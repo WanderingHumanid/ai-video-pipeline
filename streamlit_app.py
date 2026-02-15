@@ -62,21 +62,47 @@ with st.sidebar:
     pexels_api = os.getenv("PEXELS_API_KEY")
     groq_api = os.getenv("GROQ_API_KEY")
     
-    # User-uploaded secrets for custom channel upload
-    st.subheader("YouTube Upload")
-    uploaded_secrets = st.file_uploader(
-        "Upload client_secrets.json", 
-        type="json", 
-        help="To upload to YOUR channel, upload your OAuth web client secrets here. Otherwise, uploads are disabled or use default env keys."
-    )
+    # User-Friendly Auth (Input Fields)
+    st.subheader("YouTube Upload Setup")
+    
+    with st.expander(" How to get API Keys"):
+        st.markdown("""
+        ### Why do I need this?
+        This app runs **locally on your machine**. To upload videos to **your** YouTube channel, you need to create a personal "App" in Google Cloud that gives this script permission to upload on your behalf.
+        
+        ### Steps:
+        1. Go to [Google Cloud Console](https://console.cloud.google.com/).
+        2. Create a new project (e.g. "My Video App").
+        3. Search for **"YouTube Data API v3"** and click **Enable**.
+        4. Go to **Credentials** -> **Create Credentials** -> **OAuth Client ID**.
+        5. **CRITICAL:** Select **Desktop App** (Do NOT select Web Application).
+        6. Copy the **Client ID** and **Client Secret** below.
+        
+        *Note: If you get a 'redirect_uri_mismatch' error, it means you selected 'Web Application'. Please create a new 'Desktop App' credential.*
+        """)
+        
+    client_id_input = st.text_input("Client ID", type="default", help="Ends with .apps.googleusercontent.com")
+    client_secret_input = st.text_input("Client Secret", type="password")
     
     user_secrets_path = None
-    if uploaded_secrets is not None:
+    if client_id_input and client_secret_input:
+        # Construct client_secrets.json dynamically
+        secrets_data = {
+            "installed": {
+                "client_id": client_id_input,
+                "project_id": "video-pipeline-user",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_secret": client_secret_input,
+                "redirect_uris": ["http://localhost"]
+            }
+        }
         os.makedirs(".tmp", exist_ok=True)
         user_secrets_path = os.path.abspath(".tmp/user_client_secrets.json")
-        with open(user_secrets_path, "wb") as f:
-            f.write(uploaded_secrets.getbuffer())
-        st.success("✅ Custom credentials loaded")
+        with open(user_secrets_path, "w") as f:
+            json.dump(secrets_data, f)
+        st.success("✅ Credentials configured")
 
     # API Status Checks
     if pexels_api:
@@ -90,17 +116,15 @@ with st.sidebar:
         st.error("❌ Groq API Key missing")
         
     # Check if we have ANY valid YouTube auth method
-    has_youtube_env = bool(os.getenv("YOUTUBE_CLIENT_ID"))
-    has_default_secrets = os.path.exists("client_secrets.json")
-    can_upload = bool(user_secrets_path or has_youtube_env or has_default_secrets)
+    # NOTE: .env fallback is hidden from UI status to encourage user input
+    can_upload = bool(user_secrets_path)
     
     if can_upload:
-        st.success(f"✅ YouTube Upload Ready ({'Custom' if user_secrets_path else 'Env/Default'})")
+        st.success("✅ YouTube Upload Ready")
     else:
-        st.warning("⚠️ YouTube Upload disabled")
+        st.warning("⚠️ YouTube Upload disabled (Add keys above)")
 
     st.markdown("---")
-    st.caption("💡 Ensure `.env` is configurable if not using custom secrets.")
 
 
 # --- Main Content ---
@@ -338,6 +362,7 @@ if "last_video_data" in st.session_state:
 
         # Tab 2: YouTube Upload
         with tab2:
+            st.info("ℹ️ To enable uploading, configure your **YouTube API Keys** in the sidebar.")
             privacy = st.selectbox("Privacy", ["unlisted", "private", "public"])
             
             if st.button("Upload to YouTube", disabled=not can_upload):

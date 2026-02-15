@@ -48,7 +48,7 @@ def authenticate(secrets_path=None):
             if secrets_path:
                 print(f"   🔑 Authenticating with provided secrets: {secrets_path}")
                 flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
-                creds = flow.run_local_server(port=8080)
+                creds = flow.run_local_server(port=0)
             
             # 4. ELSE try .env credentials
             else:
@@ -78,7 +78,7 @@ def authenticate(secrets_path=None):
                     
                     print("   🔑 Starting browser authentication (default)...")
                     flow = InstalledAppFlow.from_client_secrets_file(default_secrets, SCOPES)
-                    creds = flow.run_local_server(port=8080)
+                    creds = flow.run_local_server(port=0)
 
         # Save valid credentials
         with open(token_path, "wb") as token:
