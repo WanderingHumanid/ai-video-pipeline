@@ -67,7 +67,7 @@ def generate_script(topic):
     prompt = PROMPT_TEMPLATE.format(topic=topic)
 
     # Attempt generation with retries
-    max_retries = 5
+    max_retries = 3
     last_error = None
 
     for attempt in range(max_retries):
@@ -143,10 +143,9 @@ def generate_script(topic):
             print(f"⚠️  {last_error}")
             error_str = str(e).lower()
             if "quota" in error_str or "429" in error_str or "resource" in error_str:
-                wait_time = 15 * (2 ** attempt)  # 15s, 30s, 60s, 120s, 240s
-                print(f"⚠️  Quota/rate limit hit (attempt {attempt + 1}). Waiting {wait_time}s...")
+                wait_time = 10 * (attempt + 1)  # 10s, 20s, 30s max
+                print(f"⚠️  Rate limit hit. Waiting {wait_time}s...")
                 time.sleep(wait_time)
-                last_error = f"Quota exceeded (attempt {attempt + 1})"
             else:
                 last_error = f"Generation error (attempt {attempt + 1}): {e}"
                 print(f"⚠️  {last_error}")

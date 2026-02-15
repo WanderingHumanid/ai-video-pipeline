@@ -52,5 +52,6 @@ desktop.ini
 # 📝 Logs
 *.log
 
-# 🎥 Media Cache (if any)
+# 🎥 Media Cache & Generated Videos
 media_cache/
+*.mp4

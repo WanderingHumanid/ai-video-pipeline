@@ -35,44 +35,57 @@ def generate_audio(script_data, voice="en-US-AriaNeural", rate="+0%"):
         Dict with audio metadata including path, duration, and voice
     """
     full_script = script_data.get("full_script", "")
-    if not full_script or full_script.strip() == "":
+    segments = script_data.get("segments", [])
+
+    if not full_script and not segments:
         raise ValueError("Script text cannot be empty")
 
-    os.makedirs(".tmp", exist_ok=True)
-    output_path = ".tmp/audio.mp3"
+    os.makedirs(".tmp/audio", exist_ok=True)
+    full_output_path = ".tmp/audio/full_audio.mp3"
+    
+    audio_segments = []
+    
+    # Generate audio for each segment
+    print(f"🎤 Generating audio for {len(segments)} segments...")
+    
+    for i, segment in enumerate(segments):
+        text = segment["text"]
+        segment_path = f".tmp/audio/segment_{i}.mp3"
+        print(f"   Generating segment {i}...")
+        
+        asyncio.run(_generate_tts(text, voice, segment_path, rate))
+        
+        if os.path.exists(segment_path):
+            duration = _measure_duration(segment_path, text)
+            audio_segments.append({
+                "index": i,
+                "text": text,
+                "file_path": segment_path,
+                "duration": duration
+            })
+        else:
+            raise RuntimeError(f"Failed to generate audio for segment {i}")
 
-    # Generate audio with retry logic
-    max_retries = 3
-    for attempt in range(max_retries):
+    # Combine all segments into full audio (optional, but good for preview)
+    from pydub import AudioSegment
+    full_audio = AudioSegment.empty()
+    for seg in audio_segments:
         try:
-            print(f"🎤 Generating audio with voice: {voice} (attempt {attempt + 1})")
-
-            # Handle long scripts by splitting
-            if len(full_script) > 5000:
-                _generate_long_script(full_script, voice, output_path, rate)
-            else:
-                asyncio.run(_generate_tts(full_script, voice, output_path, rate))
-
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                break
-            else:
-                raise RuntimeError("Audio file not created or empty")
-
+            seg_audio = AudioSegment.from_mp3(seg["file_path"])
+            full_audio += seg_audio
+            # Add a small silence between segments if needed? 
+            # For now, keeping it tight to match video concatenation
         except Exception as e:
-            print(f"⚠️  Attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                import time
-                time.sleep(2 ** attempt)
-            else:
-                raise RuntimeError(f"Audio generation failed after {max_retries} attempts: {e}")
+            print(f"⚠️  Error merging segment {seg['index']}: {e}")
 
-    # Measure actual duration
-    duration = _measure_duration(output_path, full_script)
+    full_audio.export(full_output_path, format="mp3")
+    total_duration = len(full_audio) / 1000.0
 
     output = {
         "script": full_script,
-        "local_path": output_path,
-        "duration": round(duration, 2),
+        "local_path": full_output_path,
+        "duration": round(total_duration, 2),
+        "segments": audio_segments,
         "voice": voice,
         "generated_at": datetime.datetime.now().isoformat(),
     }
@@ -80,40 +93,14 @@ def generate_audio(script_data, voice="en-US-AriaNeural", rate="+0%"):
     with open(".tmp/audio_metadata.json", "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
-    print(f"✅ Audio generated: {output_path} ({duration:.1f}s, {os.path.getsize(output_path)} bytes)")
+    print(f"✅ Audio generated: {full_output_path} ({total_duration:.1f}s)")
     return output
 
 
 def _generate_long_script(text, voice, output_path, rate):
-    """Split long scripts into chunks, generate separately, concatenate."""
-    from pydub import AudioSegment
+    # Deprecated in favor of segment-based generation, but keeping for fallback
+    pass 
 
-    # Split at sentence boundaries roughly every 4000 chars
-    chunks = []
-    current_chunk = ""
-    sentences = text.replace(". ", ".\n").split("\n")
-
-    for sentence in sentences:
-        if len(current_chunk) + len(sentence) > 4000 and current_chunk:
-            chunks.append(current_chunk.strip())
-            current_chunk = sentence
-        else:
-            current_chunk += " " + sentence
-
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-
-    print(f"   Split into {len(chunks)} chunks for processing")
-
-    combined = AudioSegment.empty()
-    for i, chunk in enumerate(chunks):
-        chunk_path = f".tmp/audio_chunk_{i}.mp3"
-        asyncio.run(_generate_tts(chunk, voice, chunk_path, rate))
-        chunk_audio = AudioSegment.from_mp3(chunk_path)
-        combined += chunk_audio
-        os.remove(chunk_path)
-
-    combined.export(output_path, format="mp3")
 
 
 def _measure_duration(audio_path, fallback_text=""):
