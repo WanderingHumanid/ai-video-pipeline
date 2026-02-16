@@ -116,12 +116,17 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
         except:
             pass
 
+    # Always generate the SRT file (for YouTube CC upload)
+    crossfade = CROSSFADE_DURATION if len(audio_segments) > 1 else 0
+    srt_path = os.path.abspath(".tmp/subtitles.srt")
+    _generate_srt(audio_segments, srt_path, crossfade)
+    print(f"   SRT generated: {srt_path}")
+
     if subtitles:
         print("   Burning subtitles with FFmpeg...")
-        crossfade = CROSSFADE_DURATION if len(audio_segments) > 1 else 0
         _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments, crossfade)
     else:
-        print("   Subtitles disabled, using raw video.")
+        print("   Subtitles not burned (SRT still available for YouTube CC).")
         shutil.copy2(raw_path, output_path)
 
     file_size_bytes = os.path.getsize(output_path)
@@ -130,7 +135,7 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
     output_meta = {
         "video_path": output_path,
         "raw_path": raw_path,
-        "srt_path": os.path.abspath(".tmp/subtitles.srt") if subtitles else None,
+        "srt_path": srt_path,
         "file_size_mb": round(file_size_mb, 2),
         "duration": round(total_duration, 2),
         "resolution": f"{target_w}x{target_h}",

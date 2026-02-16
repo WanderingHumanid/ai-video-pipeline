@@ -116,10 +116,16 @@ with st.sidebar:
         st.error("❌ Groq API Key missing")
         
     # Check if we have ANY valid YouTube auth method
-    # NOTE: .env fallback is hidden from UI status to encourage user input
-    can_upload = bool(user_secrets_path)
+    env_yt_configured = bool(
+        os.getenv("YOUTUBE_CLIENT_ID") and 
+        os.getenv("YOUTUBE_CLIENT_SECRET") and 
+        os.getenv("YOUTUBE_REFRESH_TOKEN")
+    )
+    can_upload = bool(user_secrets_path) or env_yt_configured
     
-    if can_upload:
+    if can_upload and user_secrets_path:
+        st.success("✅ YouTube Upload Ready (Custom Keys)")
+    elif can_upload and env_yt_configured:
         st.success("✅ YouTube Upload Ready")
     else:
         st.warning("⚠️ YouTube Upload disabled (Add keys above)")

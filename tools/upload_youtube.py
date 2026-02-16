@@ -19,7 +19,10 @@ def authenticate(secrets_path=None):
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
 
-    SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+    SCOPES = [
+        "https://www.googleapis.com/auth/youtube.upload",
+        "https://www.googleapis.com/auth/youtube.force-ssl",
+    ]
     creds = None
     
     # Use a separate token file for custom secrets to avoid overwriting default

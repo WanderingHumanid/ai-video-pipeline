@@ -15,10 +15,10 @@ sys.stderr.reconfigure(encoding='utf-8')
 load_dotenv()
 
 DURATION_PRESETS = {
-    30:  (3, "30-second",  "2-3"),
-    60:  (5, "60-second",  "3-5"),
-    90:  (7, "90-second",  "5-7"),
-    120: (9, "2-minute",   "6-9"),
+    30:  (5,  "30-second",  "3-4"),
+    60:  (10, "60-second",  "5-7"),
+    90:  (14, "90-second",  "7-10"),
+    120: (18, "2-minute",   "9-12"),
 }
 
 PROMPT_TEMPLATE = """You are a professional narrator and educational scriptwriter.
