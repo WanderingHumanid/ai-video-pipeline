@@ -17,6 +17,7 @@ from tools.extract_keywords import extract_keywords_from_segments
 from tools.download_media import download_media
 from tools.generate_audio import generate_audio
 from tools.compose_video import compose_video
+from tools.generate_thumbnail import generate_thumbnail
 from tools.upload_youtube import upload_video
 from tools.cleanup import cleanup
 
@@ -83,6 +84,20 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
         "duration": video_data["duration"],
     }
 
+    # --- Thumbnail ---
+    print("\n" + "─" * 40)
+    print("🖼️  Generating thumbnail...")
+    print("─" * 40)
+
+    try:
+        thumbnail_path = generate_thumbnail(topic, media_data["media_assets"])
+        results["thumbnail"] = {"path": thumbnail_path}
+        print(f"   ✅ Thumbnail: {thumbnail_path}")
+    except Exception as e:
+        print(f"   ⚠️  Thumbnail generation failed: {e}")
+        thumbnail_path = None
+        results["thumbnail"] = {"status": "failed", "error": str(e)}
+
     if not skip_upload:
         print("\n" + "─" * 40)
         print("📤 Optional: Uploading to YouTube...")
@@ -93,6 +108,8 @@ def run_pipeline(topic, voice="en-US-AriaNeural", skip_upload=False, cleanup_aft
                 video_path=video_data["video_path"],
                 topic=topic,
                 media_assets=media_data["media_assets"],
+                thumbnail_path=thumbnail_path,
+                captions_path=video_data.get("srt_path"),
             )
             results["upload"] = {
                 "url": upload_data.get("youtube_url", ""),

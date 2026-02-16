@@ -118,7 +118,7 @@ def generate_metadata(topic, media_assets=None):
     }
 
 
-def upload_video(video_path, topic, media_assets=None, privacy="unlisted", captions_path=None, secrets_path=None):
+def upload_video(video_path, topic, media_assets=None, privacy="unlisted", captions_path=None, thumbnail_path=None, secrets_path=None):
     from googleapiclient.http import MediaFileUpload
 
     if not os.path.exists(video_path):
@@ -206,6 +206,19 @@ def upload_video(video_path, topic, media_assets=None, privacy="unlisted", capti
             print("   ✅ Captions uploaded")
         except Exception as e:
             print(f"   ⚠️ Caption upload failed: {e}")
+
+    # --- Upload Thumbnail ---
+    if thumbnail_path and os.path.exists(thumbnail_path):
+        print(f"   Uploading thumbnail: {thumbnail_path}")
+        try:
+            thumbnail_media = MediaFileUpload(thumbnail_path, mimetype="image/jpeg")
+            youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=thumbnail_media
+            ).execute()
+            print("   ✅ Thumbnail uploaded")
+        except Exception as e:
+            print(f"   ⚠️ Thumbnail upload failed: {e}")
 
     result = {
         "youtube_url": youtube_url,

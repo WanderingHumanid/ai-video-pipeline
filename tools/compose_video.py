@@ -118,7 +118,8 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
 
     if subtitles:
         print("   Burning subtitles with FFmpeg...")
-        _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments)
+        crossfade = CROSSFADE_DURATION if len(audio_segments) > 1 else 0
+        _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments, crossfade)
     else:
         print("   Subtitles disabled, using raw video.")
         shutil.copy2(raw_path, output_path)
@@ -147,9 +148,9 @@ def compose_video(audio_metadata, media_assets, output_dir="output",
     return output_meta
 
 
-def _burn_subtitles_ffmpeg(input_path, output_path, audio_segments):
+def _burn_subtitles_ffmpeg(input_path, output_path, audio_segments, crossfade_duration=0):
     srt_path = os.path.abspath(".tmp/subtitles.srt")
-    _generate_srt(audio_segments, srt_path)
+    _generate_srt(audio_segments, srt_path, crossfade_duration)
 
     # FFmpeg needs forward slashes and escaped colons on Windows
     srt_ffmpeg = srt_path.replace("\\", "/")
@@ -181,13 +182,17 @@ def _burn_subtitles_ffmpeg(input_path, output_path, audio_segments):
         shutil.copy2(input_path, output_path)
 
 
-def _generate_srt(audio_segments, srt_path):
-    """Generate SRT subtitle file with word-level timing (~4 words per entry)."""
+def _generate_srt(audio_segments, srt_path, crossfade_duration=0):
+    """Generate SRT subtitle file with word-level timing (~4 words per entry).
+    
+    Accounts for crossfade overlap: each segment after the first starts
+    `crossfade_duration` seconds earlier in the final video.
+    """
     current_time = 0.0
     entry_num = 0
 
     with open(srt_path, "w", encoding="utf-8") as f:
-        for seg in audio_segments:
+        for i, seg in enumerate(audio_segments):
             seg_start = current_time
             word_timings = seg.get("word_timings", [])
 
@@ -218,7 +223,9 @@ def _generate_srt(audio_segments, srt_path):
                 f.write(f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n")
                 f.write(f"{seg['text']}\n\n")
 
-            current_time += seg["duration"]
+            # Subtract crossfade overlap for all segments after the first
+            overlap = crossfade_duration if i > 0 else 0
+            current_time += seg["duration"] - overlap
 
 
 def _format_srt_time(seconds):
@@ -296,14 +303,15 @@ def _process_image_clip(path, required_duration, target_w, target_h, fps):
     return clip.with_fps(fps)
 
 
-def burn_subtitles_only(raw_path, output_path, audio_metadata):
+def burn_subtitles_only(raw_path, output_path, audio_metadata, crossfade_duration=CROSSFADE_DURATION):
     """Re-burn subtitles on an existing raw video (no re-render needed)."""
     audio_segments = audio_metadata.get("segments", [])
     if not audio_segments:
         raise ValueError("No audio segments for subtitle generation")
 
+    crossfade = crossfade_duration if len(audio_segments) > 1 else 0
     print(f"   Re-burning subtitles on {raw_path}...")
-    _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments)
+    _burn_subtitles_ffmpeg(raw_path, output_path, audio_segments, crossfade)
 
     if os.path.exists(output_path):
         file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
