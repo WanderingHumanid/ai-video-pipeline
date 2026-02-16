@@ -26,6 +26,7 @@ dist/
 .coverage
 htmlcov/
 _test_*
+test_*.py
 _edge_path.txt
 _edgetts_output.*
 
